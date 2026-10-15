@@ -1,10 +1,13 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+pub mod audit;
 mod clock;
+pub mod grants;
 mod handlers;
 mod mail;
 mod service;
+pub mod service_accounts;
 mod store;
 
 use std::sync::OnceLock;
@@ -18,7 +21,7 @@ use time::Duration;
 
 use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, DataKind, Database, Disposition, Migrations, Module,
-    ModuleContext, PersonalDataSet, Port, Problem, SLUGS, SqlMigration, Surface,
+    ModuleContext, PersonalDataSet, Port, Problem, SLUGS, SqlMigration, SubjectVia, Surface,
 };
 
 use handlers::Settings;
@@ -37,6 +40,87 @@ const MIGRATION_INIT: SqlMigration = SqlMigration::new(
     "init",
     include_str!("../migrations/sqlite/0001_init.sql"),
 );
+
+/// Service accounts and their keys (issue #878): [`service_accounts`].
+/// Public so a venture with its own identity, which does not mount this
+/// module's routes, can apply the table under its own module.
+pub const MIGRATION_SERVICE_ACCOUNTS: SqlMigration = SqlMigration::new(
+    "0002",
+    "service-accounts",
+    include_str!("../migrations/sqlite/0002_service_accounts.sql"),
+);
+
+/// Access grants (issue #878): [`grants`]. Public for the reason
+/// [`MIGRATION_SERVICE_ACCOUNTS`] is.
+pub const MIGRATION_GRANTS: SqlMigration = SqlMigration::new(
+    "0003",
+    "grants",
+    include_str!("../migrations/sqlite/0003_grants.sql"),
+);
+
+/// The audit log (issue #878): [`audit`]. Public for the reason
+/// [`MIGRATION_SERVICE_ACCOUNTS`] is.
+pub const MIGRATION_AUDIT: SqlMigration = SqlMigration::new(
+    "0004",
+    "audit",
+    include_str!("../migrations/sqlite/0004_audit.sql"),
+);
+
+/// The personal-data declarations for the three issue #878 tables, for a
+/// venture that applies [`MIGRATION_SERVICE_ACCOUNTS`], [`MIGRATION_GRANTS`]
+/// and [`MIGRATION_AUDIT`] under a module of its own and must declare what
+/// they hold. [`Orgs`] declares the same four sets.
+pub const ACCESS_PERSONAL_DATA: [PersonalDataSet; 4] = [
+    PersonalDataSet {
+        table: service_accounts::ACCOUNTS_TABLE,
+        subject: "owner_sub",
+        kind: DataKind::Identifier,
+        disposition: Disposition::Erase,
+        description: "A service account you own: its name, what it is for, who made it, and \
+                      whether it is disabled. Erasing your account removes the service \
+                      accounts you own.",
+        redacted: &["created_by"],
+        subject_via: None,
+    },
+    PersonalDataSet {
+        table: service_accounts::KEYS_TABLE,
+        subject: "account_id",
+        kind: DataKind::Identifier,
+        disposition: Disposition::Erase,
+        description: "The API keys of a service account you own: the public prefix, the \
+                      label, the scopes, and when each was made, last used and revoked. The \
+                      key itself is held only as a hash.",
+        redacted: &["secret_hash"],
+        subject_via: Some(SubjectVia {
+            table: service_accounts::ACCOUNTS_TABLE,
+            subject: "owner_sub",
+            key: "id",
+        }),
+    },
+    PersonalDataSet {
+        table: grants::TABLE,
+        subject: "principal",
+        kind: DataKind::Identifier,
+        disposition: Disposition::Erase,
+        description: "The access you were given or refused: which part of an organization's \
+                      data, at which permission, until when, and who granted it.",
+        redacted: &["created_by"],
+        subject_via: None,
+    },
+    PersonalDataSet {
+        table: audit::TABLE,
+        subject: "actor_id",
+        kind: DataKind::Usage,
+        disposition: Disposition::Retain(
+            "An audit trail that an erasure could rewrite would no longer show who did what. \
+             Entries name ids and credential prefixes, never secrets or content.",
+        ),
+        description: "What you did in an organization that its administrators can review: \
+                      the action, what it touched, when, and with which credential prefix.",
+        redacted: &[],
+        subject_via: None,
+    },
+];
 
 /// The invitation lifetime when a venture sets none.
 const DEFAULT_INVITATION_TTL_SECS: i64 = 7 * 86_400;
@@ -429,7 +513,15 @@ impl Module for Orgs {
     }
 
     fn tables(&self) -> &'static [&'static str] {
-        &["orgs", "org_members", "org_invitations"]
+        &[
+            "orgs",
+            "org_members",
+            "org_invitations",
+            service_accounts::ACCOUNTS_TABLE,
+            service_accounts::KEYS_TABLE,
+            grants::TABLE,
+            audit::TABLE,
+        ]
     }
 
     /// Three tables, one declaration each — `HarnessBuilder::build` refuses a
@@ -498,12 +590,20 @@ impl Module for Orgs {
                     subject_via: None,
                 },
             ]
+            .into_iter()
+            .chain(ACCESS_PERSONAL_DATA)
+            .collect()
         })
         .as_slice()
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 1] = [MIGRATION_INIT];
+        const MIGRATIONS: [SqlMigration; 4] = [
+            MIGRATION_INIT,
+            MIGRATION_SERVICE_ACCOUNTS,
+            MIGRATION_GRANTS,
+            MIGRATION_AUDIT,
+        ];
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         Migrations::sqlite(&MIGRATIONS)
     }

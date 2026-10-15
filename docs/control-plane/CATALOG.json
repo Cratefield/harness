@@ -536,7 +536,7 @@
         }
       ],
       "detail": {
-        "what_it_is": "Organizations, memberships, roles and email invitations. A person creates an organization and is its owner, invites people by address, and everyone who belongs holds a role the venture configured. An organization always keeps at least one owner, an invitation stores only the SHA-256 of its token and of the invitee's address, and a caller who is not a member gets the same answer as one asking about an organization that does not exist — so organizations cannot be enumerated.",
+        "what_it_is": "Organizations, memberships, roles and email invitations. A person creates an organization and is its owner, invites people by address, and everyone who belongs holds a role the venture configured. An organization always keeps at least one owner, an invitation stores only the SHA-256 of its token and of the invitee's address, and a caller who is not a member gets the same answer as one asking about an organization that does not exist — so organizations cannot be enumerated. It also holds service accounts and their hashed API keys, deny-by-default access grants, and an append-only audit log, as library functions a venture with its own identity can call.",
         "crate_name": "cratefield-module-orgs",
         "needs": [
           "Database",
@@ -550,7 +550,11 @@
         "tables": [
           "orgs",
           "org_members",
-          "org_invitations"
+          "org_invitations",
+          "org_service_accounts",
+          "org_service_account_keys",
+          "org_grants",
+          "org_audit"
         ],
         "routes": [
           {

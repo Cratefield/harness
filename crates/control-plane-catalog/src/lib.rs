@@ -1074,11 +1074,21 @@ fn orgs() -> ModuleDetail {
                  least one owner, an invitation stores only the SHA-256 of its token and of \
                  the invitee's address, and a caller who is not a member gets the same answer \
                  as one asking about an organization that does not exist — so organizations \
-                 cannot be enumerated.",
+                 cannot be enumerated. It also holds service accounts and their hashed API \
+                 keys, deny-by-default access grants, and an append-only audit log, as \
+                 library functions a venture with its own identity can call.",
         "cratefield-module-orgs",
         &["Database", "Auth"],
         &["Clock", "IdGen", "Mailer"],
-        &["orgs", "org_members", "org_invitations"],
+        &[
+            "orgs",
+            "org_members",
+            "org_invitations",
+            "org_service_accounts",
+            "org_service_account_keys",
+            "org_grants",
+            "org_audit",
+        ],
         vec![
             route(
                 "POST",
