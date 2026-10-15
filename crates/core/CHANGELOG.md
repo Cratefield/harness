@@ -8,6 +8,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A `UrlSafety` port** (issue #857). `check` asks whether one URL is
+  safe to fetch — malware, social engineering, unwanted software — and
+  `check_many` batches the ask, verdicts in input order. Limits are
+  checked locally before any network call by `check_url` /
+  `check_batch`, which refuse with `UrlSafetyError::LimitExceeded`
+  (2 048-byte URLs, batches of 500 — Safe Browsing v4's ceiling). The
+  privacy contract is the port's first doc: the checked URL is a
+  secret, so no implementation may log it or place it in an error
+  string, and the one variant carrying provider text is scrubbed
+  through `scrub_text` in `Display`. `CachedUrlSafety` decorates any
+  implementation with a bounded, `Clock`-driven TTL cache that honours
+  the provider's advised retention and never holds its lock across an
+  `await`.
+
 - **A `Speech` port** (issue #861, ADR 0029). `transcribe` (audio in,
   a `Transcript` with optional word timings out) and `synthesize` (text
   in, a streamed `Synthesis` out), plus `voices`, `capabilities` and
