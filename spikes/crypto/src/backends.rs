@@ -3,6 +3,14 @@
 //! path, AAD computation and caching live in [`crate::store`] and are
 //! shared, so the candidates are scored on exactly the same usage.
 
+// The three AEAD backends below pull these names in through `use super::*`.
+// With no backend feature enabled they compile out, so the import is gated
+// to keep the default (feature-less) `cargo clippy -D warnings` run green.
+#[cfg(any(
+    feature = "aws-lc-backend",
+    feature = "ring-backend",
+    feature = "rustcrypto"
+))]
 use crate::{AeadError, Dek, EnvelopeAead};
 
 // ---------------------------------------------------------------------------

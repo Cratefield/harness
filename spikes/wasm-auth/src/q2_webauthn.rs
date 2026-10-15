@@ -127,10 +127,8 @@ fn check_client_data(
 }
 
 fn check_rp_id_hash(auth_data: &AuthData, rp_id: &str) -> Result<(), String> {
-    let expected: [u8; 32] = Sha256::digest(rp_id.as_bytes())
-        .as_slice()
-        .try_into()
-        .expect("sha256 is 32 bytes");
+    let digest = Sha256::digest(rp_id.as_bytes());
+    let expected: [u8; 32] = digest[..].try_into().expect("sha256 is 32 bytes");
     if auth_data.rp_id_hash != expected {
         return Err("rpId hash mismatch".into());
     }
@@ -238,10 +236,8 @@ fn assertion_input(
     assertion: &AuthenticatorAssertionResponseRaw,
 ) -> Result<(Vec<u8>, [u8; 32]), String> {
     let client_data_raw = assertion.client_data_json.as_slice();
-    let client_data_hash: [u8; 32] = Sha256::digest(client_data_raw)
-        .as_slice()
-        .try_into()
-        .expect("sha256 is 32 bytes");
+    let digest = Sha256::digest(client_data_raw);
+    let client_data_hash: [u8; 32] = digest[..].try_into().expect("sha256 is 32 bytes");
     let mut signed = Vec::with_capacity(assertion.authenticator_data.len() + 32);
     signed.extend_from_slice(assertion.authenticator_data.as_slice());
     signed.extend_from_slice(&client_data_hash);
