@@ -2066,6 +2066,7 @@ dependencies = [
  "cratefield-mail-templates",
  "cratefield-module-privacy",
  "cratefield-testing",
+ "getrandom 0.4.3",
  "hex",
  "http",
  "pollster",
