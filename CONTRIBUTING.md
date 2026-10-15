@@ -33,9 +33,11 @@ every module's conformance run and the generated-doc drift checks
 
 CI also builds the crates outside the workspace (`crates/auth-fz`,
 `spikes/*`, …) with `--locked`. Bumping a workspace dependency leaves
-their lockfiles behind — refresh each stale one by running
-`cargo metadata --format-version 1 > /dev/null` in its directory and
-committing the updated `Cargo.lock`.
+their lockfiles behind — refresh them with
+`tools/out-of-workspace-crates.sh --refresh-locks` (which runs
+`cargo metadata --format-version 1 > /dev/null` in each one's directory)
+and commit the updated `Cargo.lock` files. The release workflow does
+this on the release PR by itself.
 
 Real output of the wasm build on a clean tree:
 

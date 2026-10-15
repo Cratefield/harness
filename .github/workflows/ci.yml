@@ -177,9 +177,11 @@ jobs:
   # Cargo.lock, and no job above compiles them. A workspace dependency bump
   # can therefore leave one of those lockfiles stale, pass CI, and break
   # the first `cargo build --locked` out of tree (issue #856). Discovery
-  # re-derives the list every run from git and `cargo metadata`, so a new
-  # crate added outside the workspace is covered without editing this
-  # file; the script fails when the query finds none.
+  # (tools/out-of-workspace-crates.sh, which the release workflow also
+  # uses to refresh these locks on the release PR) re-derives the list
+  # every run from git and `cargo metadata`, so a new crate added outside
+  # the workspace is covered without editing this file; the script fails
+  # when the query finds none.
   out-of-workspace-crates:
     name: out-of-workspace crate discovery
     runs-on: ubuntu-latest
@@ -191,44 +193,18 @@ jobs:
         with:
           toolchain: "1.98.1"
       - id: discover
+        # Assigned first so a failing discovery fails the step: `echo
+        # "...$(cmd)"` would swallow the exit status.
         run: |
-          python3 - <<'PY'
-          import json, os, subprocess
-
-          # Every Cargo.toml git tracks; the root manifest itself defines
-          # the workspace rather than a crate, so its directory ("") drops.
-          tracked = subprocess.run(
-              ["git", "ls-files", "*Cargo.toml", ":!:**/node_modules/**"],
-              check=True, capture_output=True, text=True,
-          ).stdout.splitlines()
-          tracked_dirs = {d for f in tracked if (d := os.path.dirname(f))}
-
-          # The packages the root workspace actually resolved: the
-          # `members` globs minus the `exclude` list, with the spikes' own
-          # `[workspace]` tables keeping them out too.
-          members = json.loads(subprocess.run(
-              ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-              check=True, capture_output=True, text=True,
-          ).stdout)
-          member_dirs = {
-              os.path.relpath(os.path.dirname(p["manifest_path"]))
-              for p in members["packages"]
-          }
-
-          out = sorted(tracked_dirs - member_dirs)
-          if not out:
-              raise SystemExit(
-                  "no out-of-workspace Cargo.toml found: the discovery query is broken"
-              )
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"dirs={json.dumps(out)}\n")
-          PY
+          dirs=$(tools/out-of-workspace-crates.sh)
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
 
   # One matrix entry per crate discovery found. `--locked` on every cargo
   # run is the point (issue #856): it fails when this crate's Cargo.lock
-  # was left behind by a workspace dependency bump. Refresh a stale lock
-  # by running `cargo metadata --format-version 1 > /dev/null` in the
-  # crate's directory and committing the updated Cargo.lock.
+  # was left behind by a workspace dependency bump. Refresh stale locks
+  # with `tools/out-of-workspace-crates.sh --refresh-locks` and commit the
+  # updated Cargo.lock files. The release workflow does this on the
+  # release PR, whose version bumps would otherwise fail here every time.
   standalone:
     name: standalone crate (${{ matrix.dir }})
     needs: out-of-workspace-crates
