@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS sealed_blobs (
     object_key             TEXT,
     -- The server-side validator behind `ETag`/`If-Match`; see the
     -- sqlite set.
-    revision               BIGINT NOT NULL,
+    revision               INTEGER NOT NULL,
     created_at             TEXT NOT NULL,
     updated_at             TEXT NOT NULL,
     PRIMARY KEY (subject, blob_id)
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS sealed_deks (
     kms_provider  TEXT NOT NULL,
     kms_key_ref   TEXT NOT NULL,
     wrapped_dek   BYTEA NOT NULL,
-    revision      BIGINT NOT NULL,
+    revision      INTEGER NOT NULL,
     PRIMARY KEY (subject, blob_id)
 );
 
