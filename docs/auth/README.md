@@ -165,6 +165,8 @@ Design adopted 2026-09-06; per-instance model adopted 2026-10-05 (issue
 instance per app. `instances/alphahunt`, `instances/yoginini` and
 `instances/keepshipping` are live on staging only (`auth-staging.alphahunt.ing`,
 `auth-staging.yoginini.us`, `auth-staging.keepshipping.run`);
+`instances/findsyou` (`auth.findsyou.work`) has both D1s provisioned and
+goes to production first, for the live FindsYou app;
 their production deploys and `instances/cratefield` wait on the steps in
 [MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (secrets, Owlpost, Turnstile,
 first `auth-v*` tag). Per-organization enterprise SSO over OpenID

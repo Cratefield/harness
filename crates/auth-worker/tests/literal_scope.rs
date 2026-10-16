@@ -15,6 +15,7 @@ const APP_MARKERS: &[&str] = &[
     concat!("factory", " zero"),
     "cratefield.com",
     "alphahunt",
+    "findsyou",
     "keepshipping",
     "yoginini",
     "earthos",

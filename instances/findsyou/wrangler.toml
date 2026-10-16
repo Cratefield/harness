@@ -1,0 +1,136 @@
+# The `findsyou` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for FindsYou on FindsYou's own domain with
+# FindsYou's own branding, D1, secrets and passkey relying party. Hosted by
+# Cratefield on FindsYou's domain (a Cratefield-managed instance), on the
+# Factory0 Cloudflare account that holds findsyou.work. Consumer: the
+# FindsYou app Worker (FindsYou-Work/app, served on `api.findsyou.work`), a
+# **confidential** client with the redirect
+# `https://api.findsyou.work/auth/callback` (`AUTH_ISSUER`, `AUTH_CLIENT_ID`,
+# `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI`).
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-findsyou-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# Both D1s exist (ids below; created 2026-10-16). Still needed per
+# environment (docs/auth/MANAGED-INSTANCES.md), by name only:
+# HARNESS_SECRET, ADMIN_TOKEN, AUTH_CORE_SIGNING_KEYS
+# (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY, TURNSTILE_SECRET.
+# Mail goes out from `send.findsyou.work`, already verified in Owlpost for
+# the FindsYou waitlist.
+name = "findsyou-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.findsyou.work", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1501"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "findsyou-auth-staging"
+database_id = "2be9d67e-3ca4-4c64-ba99-f33b61d4472c"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.findsyou.work"
+AUTH_CORE_ISSUER = "https://auth-staging.findsyou.work"
+AUTH_VENTURE_NAME = "findsyou-auth"
+AUTH_CORS_ORIGINS = "https://api.findsyou.work,https://findsyou.work"
+AUTH_BRAND_NAME = "FindsYou"
+AUTH_BRAND_FOOTER = "FindsYou"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "auth-staging.findsyou.work"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.findsyou.work"
+# Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
+# the OWLPOST_API_KEY secret exists, and boots without mail until then
+# (production keeps `owlpost` and refuses to boot without the key).
+MAIL_FROM = "FindsYou <no-reply@send.findsyou.work>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.findsyou.work"
+AUTH_MAGIC_LINK_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.findsyou.work"
+AUTH_PASSWORD_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.findsyou.work"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.findsyou.work"
+AUTH_BRAND_LOGO_URL = "https://api.findsyou.work/mail/logo.png"
+AUTH_BRAND_ACCENT = "#1a56db"
+AUTH_BRAND_SUPPORT_EMAIL = "hello@findsyou.work"
+# AUTH_BRAND_PRIVACY_URL = "https://findsyou.work/privacy"   # needs-human: findsyou.work has no privacy page yet (404); uncomment once it exists
+# AUTH_BRAND_TERMS_URL = "https://findsyou.work/terms"   # needs-human: findsyou.work has no terms page yet (404); uncomment once it exists
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.findsyou.work", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1502"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "findsyou-auth-production"
+database_id = "247a4477-f31e-4201-8781-b7bf1fc23dfb"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.findsyou.work"
+AUTH_CORE_ISSUER = "https://auth.findsyou.work"
+AUTH_VENTURE_NAME = "findsyou-auth"
+AUTH_CORS_ORIGINS = "https://api.findsyou.work,https://findsyou.work"
+AUTH_BRAND_NAME = "FindsYou"
+AUTH_BRAND_FOOTER = "FindsYou"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "findsyou.work"
+AUTH_PASSKEYS_ORIGINS = "https://auth.findsyou.work"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "FindsYou <no-reply@send.findsyou.work>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.findsyou.work"
+AUTH_MAGIC_LINK_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.findsyou.work"
+AUTH_PASSWORD_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.findsyou.work"
+AUTH_META_REDIRECT_BASE = "https://auth.findsyou.work"
+AUTH_BRAND_LOGO_URL = "https://api.findsyou.work/mail/logo.png"
+AUTH_BRAND_ACCENT = "#1a56db"
+AUTH_BRAND_SUPPORT_EMAIL = "hello@findsyou.work"
+# AUTH_BRAND_PRIVACY_URL = "https://findsyou.work/privacy"   # needs-human: findsyou.work has no privacy page yet (404); uncomment once it exists
+# AUTH_BRAND_TERMS_URL = "https://findsyou.work/terms"   # needs-human: findsyou.work has no terms page yet (404); uncomment once it exists
