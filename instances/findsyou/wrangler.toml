@@ -79,6 +79,10 @@ AUTH_PASSKEYS_ORIGINS = "https://auth-staging.findsyou.work"
 MAIL_FROM = "FindsYou <no-reply@send.findsyou.work>"
 AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.findsyou.work"
 AUTH_MAGIC_LINK_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
+# FindsYou is open sign-up: an address with no account gets one on its first
+# link. Off (the module default), a new address is answered 202 and sent
+# nothing, which reads as "no mail" to everyone who has not signed up yet.
+AUTH_MAGIC_LINK_ALLOW_REGISTRATION = "true"
 AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.findsyou.work"
 AUTH_PASSWORD_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.findsyou.work"
@@ -125,6 +129,10 @@ AUTH_MAILER = "owlpost"
 MAIL_FROM = "FindsYou <no-reply@send.findsyou.work>"
 AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.findsyou.work"
 AUTH_MAGIC_LINK_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
+# FindsYou is open sign-up: an address with no account gets one on its first
+# link. Off (the module default), a new address is answered 202 and sent
+# nothing, which reads as "no mail" to everyone who has not signed up yet.
+AUTH_MAGIC_LINK_ALLOW_REGISTRATION = "true"
 AUTH_PASSWORD_PUBLIC_BASE = "https://auth.findsyou.work"
 AUTH_PASSWORD_MAIL_FROM = "FindsYou <sign-in@send.findsyou.work>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth.findsyou.work"
