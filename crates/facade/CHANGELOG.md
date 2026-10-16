@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/Cratefield/harness/compare/cratefield-v0.2.1...cratefield-v0.2.2) - 2026-10-16
+
+### Other
+
+- updated the following local packages: cratefield-core, cratefield-runtime-cloudflare, cratefield-adapter-anthropic, cratefield-adapter-sqlite, cratefield-adapter-postgres, cratefield-testing, cratefield-mail-templates, cratefield-module-email-signup, cratefield-module-privacy, cratefield-module-waitlist, cratefield-push-auth, cratefield-adapter-apns, cratefield-adapter-classifier-llm, cratefield-adapter-cloudflare-saas, cratefield-adapter-colonizer, cratefield-adapter-fcm, cratefield-adapter-github-app, cratefield-adapter-github-issues, cratefield-adapter-jira, cratefield-adapter-linear, cratefield-adapter-openai-compatible, cratefield-adapter-owlpost, cratefield-adapter-polar, cratefield-adapter-stripe, cratefield-adapter-resend, cratefield-adapter-telegram, cratefield-secrets, cratefield-adapter-turnkey, cratefield-adapter-turnstile, cratefield-adapter-typesafe, cratefield-adapter-webhook-tracker, cratefield-adapter-webpush, cratefield-auth-client, cratefield-push-wiring, cratefield-runtime-native, cratefield-oauth-client, cratefield-module-device-auth, cratefield-client-ts, cratefield-import-supabase, cratefield-introspect, cratefield-ui, cratefield-module-changelog, cratefield-module-cms, cratefield-module-crm, cratefield-module-notifications, cratefield-module-orgs, cratefield-module-telemetry, cratefield-module-connections, cratefield-module-guardrails, cratefield-module-owlpost, cratefield-module-sealed, cratefield-module-telegram, cratefield-module-wallets, cratefield-module-webhooks, cratefield-tables-api
+
 ## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-v0.2.0...cratefield-v0.2.1) - 2026-10-15
 
 ### Added

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.7.0...cratefield-cli-v0.7.1) - 2026-10-16
+
+### Other
+
+- updated the following local packages: cratefield-core, cratefield-adapter-sqlite, cratefield-adapter-postgres, cratefield-push-auth, cratefield-adapter-typesafe, cratefield-adapter-webpush, cratefield-push-wiring, cratefield-runtime-native, cratefield-client-ts, cratefield-import-supabase, cratefield-tables, cratefield-introspect
+
 ## [0.7.0](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.6.2...cratefield-cli-v0.7.0) - 2026-10-15
 
 ### Other
