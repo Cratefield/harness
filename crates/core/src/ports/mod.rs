@@ -29,6 +29,7 @@ pub(crate) mod signer;
 mod speech;
 mod text_model;
 mod tracker;
+mod url_safety;
 mod vector_index;
 
 pub use actor::{
@@ -100,6 +101,11 @@ pub use tracker::{
     StatusWebhook, TicketComment, TicketDraft, TicketState, TicketStatus, Tracker, TrackerError,
     receive_status,
 };
+pub use url_safety::{
+    CachedUrlSafety, DEFAULT_CACHE_CAPACITY, DEFAULT_MAX_BATCH, DEFAULT_MAX_URL_LEN,
+    DEFAULT_NEGATIVE_TTL, ThreatType, UrlSafety, UrlSafetyError, UrlSafetyLimit, UrlSafetyLimits,
+    UrlSafetySource, UrlVerdict, check_batch, check_url,
+};
 pub use vector_index::{
     ExactVectorIndex, MAX_NAMESPACE_BYTES, VectorFilter, VectorIndex, VectorIndexError,
     VectorMatch, VectorNamespace, VectorRecord,
@@ -131,6 +137,10 @@ pub enum Port {
     VectorIndex,
     Embedder,
     CustomHostnames,
+    /// Whether a URL is safe to fetch (issue #857): malware, social
+    /// engineering and unwanted-software verdicts by capability, never
+    /// by vendor.
+    UrlSafety,
     HttpClient,
     Clock,
     IdGen,
@@ -189,6 +199,7 @@ ports!(
     VectorIndex,
     Embedder,
     CustomHostnames,
+    UrlSafety,
     HttpClient,
     Clock,
     IdGen,
@@ -216,6 +227,7 @@ impl Port {
             Port::VectorIndex => "vector_index",
             Port::Embedder => "embedder",
             Port::CustomHostnames => "custom_hostnames",
+            Port::UrlSafety => "url_safety",
             Port::HttpClient => "HttpClient",
             Port::Clock => "Clock",
             Port::IdGen => "IdGen",
@@ -264,6 +276,9 @@ pub struct Ports {
     /// #590) — Cloudflare for `SaaS` behind the same trait on every
     /// runtime.
     pub custom_hostnames: Option<Arc<dyn CustomHostnames>>,
+    /// Whether a URL is safe to fetch (issue #857), the read side of
+    /// link generation, as `captcha` is of form posts.
+    pub url_safety: Option<Arc<dyn UrlSafety>>,
     pub http: Option<Arc<dyn HttpClient>>,
     pub clock: Option<Arc<dyn Clock>>,
     pub id_gen: Option<Arc<dyn IdGen>>,
@@ -315,6 +330,7 @@ impl Ports {
             vector_index: None,
             embedder: None,
             custom_hostnames: None,
+            url_safety: None,
             http: None,
             clock: None,
             id_gen: None,
@@ -367,6 +383,7 @@ impl Ports {
             Port::VectorIndex => self.vector_index.is_some(),
             Port::Embedder => self.embedder.is_some(),
             Port::CustomHostnames => self.custom_hostnames.is_some(),
+            Port::UrlSafety => self.url_safety.is_some(),
             Port::HttpClient => self.http.is_some(),
             Port::Clock => self.clock.is_some(),
             Port::IdGen => self.id_gen.is_some(),
@@ -448,6 +465,9 @@ impl Ports {
         }
         if allows(&declared, Port::CustomHostnames) {
             view.custom_hostnames.clone_from(&self.custom_hostnames);
+        }
+        if allows(&declared, Port::UrlSafety) {
+            view.url_safety.clone_from(&self.url_safety);
         }
         if allows(&declared, Port::HttpClient) {
             view.http.clone_from(&self.http);

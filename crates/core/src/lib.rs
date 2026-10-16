@@ -173,6 +173,13 @@ pub use ports::{
     SpeechUsage, Synthesis, SynthesizeRequest, TranscribeRequest, Transcript, Voice, WordTiming,
     check_synthesize, check_transcribe, primary_subtag, wav_duration,
 };
+// The `UrlSafety` port (issue #857), kept out of the wholesale block
+// above so that block stays untouched.
+pub use ports::{
+    CachedUrlSafety, DEFAULT_CACHE_CAPACITY, DEFAULT_MAX_BATCH, DEFAULT_MAX_URL_LEN,
+    DEFAULT_NEGATIVE_TTL, ThreatType, UrlSafety, UrlSafetyError, UrlSafetyLimit, UrlSafetyLimits,
+    UrlSafetySource, UrlVerdict, check_batch, check_url,
+};
 // The Blob presign API (issue #622), kept out of the wholesale block above.
 pub use ports::{DEFAULT_PRESIGN_TTL, MAX_PRESIGN_TTL, PresignedPut};
 // The inbound mail source (issue #563), kept out of the wholesale block
