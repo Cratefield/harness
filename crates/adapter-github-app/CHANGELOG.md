@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/Cratefield/harness/compare/cratefield-adapter-github-app-v0.2.1...cratefield-adapter-github-app-v0.2.2) - 2026-10-16
+
+### Other
+
+- updated the following local packages: cratefield-core, cratefield-push-auth
+
 ## [0.2.1](https://github.com/Cratefield/harness/compare/cratefield-adapter-github-app-v0.2.0...cratefield-adapter-github-app-v0.2.1) - 2026-10-15
 
 ### Other

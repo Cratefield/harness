@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/Cratefield/harness/compare/cratefield-runtime-cloudflare-v0.4.3...cratefield-runtime-cloudflare-v0.5.0) - 2026-10-16
+
+### Other
+
+- [**breaking**] supported module logging on Workers and native ([#846](https://github.com/Cratefield/harness/pull/846)) ([#883](https://github.com/Cratefield/harness/pull/883))
+
 ## [0.4.3](https://github.com/Cratefield/harness/compare/cratefield-runtime-cloudflare-v0.4.2...cratefield-runtime-cloudflare-v0.4.3) - 2026-10-15
 
 ### Other

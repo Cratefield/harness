@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.9.0...cratefield-core-v0.10.0) - 2026-10-16
+
+### Other
+
+- [**breaking**] supported module logging on Workers and native ([#846](https://github.com/Cratefield/harness/pull/846)) ([#883](https://github.com/Cratefield/harness/pull/883))
+
 ## [0.9.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.8.4...cratefield-core-v0.9.0) - 2026-10-15
 
 ### Added
