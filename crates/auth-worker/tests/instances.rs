@@ -76,6 +76,7 @@ fn the_known_instances_exist() {
     for expected in [
         "alphahunt",
         "cratefield",
+        "earthos",
         "findsyou",
         "keepshipping",
         "yoginini",
