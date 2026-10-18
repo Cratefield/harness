@@ -137,6 +137,7 @@ pub fn full_fake_ports() -> Ports {
     )));
     ports.id_gen = Some(Arc::new(UlidIdGen));
     ports.defer = Some(Arc::new(crate::fakes::FakeDefer::new()));
+    ports.url_safety = Some(Arc::new(crate::fakes::FakeUrlSafety));
     // The actor host gets its own clock: the ports' `FixedClock` is
     // immutable, while a test that fires an alarm advances this one. An
     // empty handler registry is enough — a module only ever reaches a

@@ -298,7 +298,7 @@ pub fn check_batch(urls: &[String], limits: &UrlSafetyLimits) -> Result<(), UrlS
 /// vendor. Every adapter MUST run [`check_url`] / [`check_batch`] at the
 /// top of `check` / `check_many`, before any network call, so a refusal
 /// costs nothing and every adapter refuses identically. The privacy
-/// contract in the [module docs](self) is binding: never log the checked
+/// contract in the module docs at the top of this file is binding: never log the checked
 /// URL, never carry it in an error string.
 #[async_trait]
 pub trait UrlSafety: Send + Sync {

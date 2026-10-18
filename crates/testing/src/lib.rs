@@ -89,9 +89,10 @@ pub use fakes::{
     Ask, AuthMode, ClassifierMode, CommentedCall, EmptyDatabase, FAKE_EMBEDDER_DIMENSIONS,
     FAKE_EMBEDDER_MODEL, FakeAuth, FakeCaptcha, FakeClassifier, FakeCustomHostnames, FakeDefer,
     FakeDispatcher, FakeEmbedder, FakeHttpClient, FakeMailer, FakePayments, FakePush,
-    FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker, FiledCall, FixedClock, MailerMode,
-    ManualClock, MemoryActors, MemoryBlob, MemoryKeyValue, PaymentsCall, PaymentsMode, PushMode,
-    StatusedCall, TextModelMode, TrackerMode, error_json, problem_json, with_retry_after,
+    FakeRateLimiter, FakeRealtime, FakeTextModel, FakeTracker, FakeUrlSafety, FiledCall,
+    FixedClock, MailerMode, ManualClock, MemoryActors, MemoryBlob, MemoryKeyValue, PaymentsCall,
+    PaymentsMode, PushMode, StatusedCall, TextModelMode, TrackerMode, error_json, problem_json,
+    with_retry_after,
 };
 #[cfg(feature = "harness")]
 pub use harness::TestHarness;
