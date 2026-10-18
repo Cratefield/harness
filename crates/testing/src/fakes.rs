@@ -22,7 +22,8 @@ use cratefield_core::{
     HostnameClaim, HttpClient, HttpError, KeyValue, KvError, MailError, Mailer, Message, ModelTier,
     Prompt, ProviderStatus, Question, RateLimitError, RateLimiter, Row, Rows, SendOutcome,
     Statement, TextModel, TextModelError, TicketComment, TicketDraft, TicketState, TicketStatus,
-    Tracker, TrackerError, Validation, Verdict, check_hostname, run_actor_alarm, run_actor_message,
+    Tracker, TrackerError, UrlSafety, UrlSafetyError, UrlSafetyLimits, UrlSafetySource, UrlVerdict,
+    Validation, Verdict, check_hostname, check_url, run_actor_alarm, run_actor_message,
     validate_questions,
 };
 use futures_core::Stream;
@@ -2833,5 +2834,32 @@ mod tests {
             MemoryBlob::new().signed_url("k", ttl).await.unwrap_err(),
             cratefield_core::BlobError::Unsupported(_)
         ));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FakeUrlSafety
+
+/// A [`UrlSafety`] that knows every URL as clean. It runs the port's own
+/// [`check_url`] first, as every adapter must, so a fixture URL that is
+/// not http(s) or is over the length ceiling is refused the same way the
+/// real adapters refuse it. Wired into [`crate::full_fake_ports`] so the
+/// conformance kit and the runtime clone checks see the port present.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FakeUrlSafety;
+
+#[async_trait]
+impl UrlSafety for FakeUrlSafety {
+    async fn check(&self, url: &str) -> Result<UrlVerdict, UrlSafetyError> {
+        check_url(url, &UrlSafetyLimits::default())?;
+        Ok(UrlVerdict {
+            url: url.to_owned(),
+            threats: Vec::new(),
+            source: UrlSafetySource::GoogleWebRisk,
+            checked_at: time::OffsetDateTime::from_unix_timestamp(1_800_000_000)
+                .expect("fixed epoch"),
+            cache_ttl: None,
+            cached: false,
+        })
     }
 }

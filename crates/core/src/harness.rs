@@ -908,6 +908,7 @@ impl Harness {
             vector_index: _,
             embedder: _,
             custom_hostnames: _,
+            url_safety: _,
             http: _,
             clock,
             id_gen,
