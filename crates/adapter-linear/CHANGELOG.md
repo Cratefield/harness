@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - updated the following local packages: cratefield-core
 
-## 0.1.0
+## 0.1.0 - 2026-10-15
 
 ### Other
 
