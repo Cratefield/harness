@@ -30,7 +30,7 @@ for that venture.
 
 Not built from a template — the harness has none. A venture is scaffolded
 with `fz init`, gains modules with `fz add`, and `fz build` generates the
-crate ([docs/VENTURE-GUIDE.md](../../../docs/VENTURE-GUIDE.md)). What exists
+crate ([docs/VENTURE-GUIDE.md](../../docs/VENTURE-GUIDE.md)). What exists
 here today is this README and the composition below.
 
 ## Composition
@@ -79,8 +79,9 @@ an approval in the GitHub Environment.
 
 ## Getting there
 
-The [issues](../../issues) are ordered: bootstrap and staging first, then the
-three steps only the owner can do (Resend sending subdomain, Turnstile site,
-production secrets), then wiring the website forms, then the `v0.1.0` tag.
+The [issues](https://github.com/Cratefield/harness/issues) are ordered:
+bootstrap and staging first, then the three steps only the owner can do
+(Resend sending subdomain, Turnstile site, production secrets), then
+wiring the website forms, then the `v0.1.0` tag.
 
 Private to Factory Zero.
