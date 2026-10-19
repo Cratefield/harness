@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/Cratefield/harness/compare/cratefield-auth-client-v0.3.3...cratefield-auth-client-v0.3.4) - 2026-10-19
+
+### Other
+
+- updated the following local packages: cratefield-core, cratefield-testing
+
 ## [0.3.3](https://github.com/Cratefield/harness/compare/cratefield-auth-client-v0.3.2...cratefield-auth-client-v0.3.3) - 2026-10-15
 
 ### Other

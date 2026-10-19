@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/Cratefield/harness/compare/cratefield-core-v0.9.0...cratefield-core-v0.10.0) - 2026-10-19
+
+### Other
+
+- UrlSafety under Unreleased, and date the two undated 0.1.0 headings ([#890](https://github.com/Cratefield/harness/pull/890))
+- UrlSafety port in core, with a Google Safe Browsing / Web Risk adapter ([#857](https://github.com/Cratefield/harness/pull/857)) ([#880](https://github.com/Cratefield/harness/pull/880))
+- [**breaking**] supported module logging on Workers and native ([#846](https://github.com/Cratefield/harness/pull/846)) ([#883](https://github.com/Cratefield/harness/pull/883))
+
 ### Added
 
 - **A `UrlSafety` port** (issue #857). `check` asks whether one URL is

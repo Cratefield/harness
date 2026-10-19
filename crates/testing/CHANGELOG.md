@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.2...cratefield-testing-v0.5.3) - 2026-10-19
+
+### Other
+
+- UrlSafety port in core, with a Google Safe Browsing / Web Risk adapter ([#857](https://github.com/Cratefield/harness/pull/857)) ([#880](https://github.com/Cratefield/harness/pull/880))
+
 ## [0.5.2](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.1...cratefield-testing-v0.5.2) - 2026-10-15
 
 ### Added
