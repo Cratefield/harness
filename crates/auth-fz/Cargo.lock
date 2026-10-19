@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "base64 0.23.1",
  "bytes",
