@@ -53,6 +53,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Chunk-and-reassemble completion** (issue #847). `split_text_chunks`
+  splits a long document into chunks of at most `max_chars` chars on
+  paragraph boundaries, never inside a fenced code block (an oversized
+  fence is the one atomic, oversized chunk), and the round trip is
+  byte-exact; `reassemble_text_chunks` stitches the pieces back in order;
+  `TextModelChunkedExt::complete_chunked` runs the split → per-chunk
+  `TextModel::complete` → reassemble loop over any `TextModel`, so a
+  long rewrite no longer has to fit inside one `HttpPolicy` response
+  timeout. For generation-shaped jobs prefer `TextModel::stream`
+  (issue #859) — chunking buys its bound with one round trip per chunk.
+
 - **A `Speech` port** (issue #861, ADR 0029). `transcribe` (audio in,
   a `Transcript` with optional word timings out) and `synthesize` (text
   in, a streamed `Synthesis` out), plus `voices`, `capabilities` and

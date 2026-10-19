@@ -61,6 +61,11 @@ mod template;
 mod tenant;
 mod tenant_conn;
 mod tenant_lifecycle;
+// Chunk-and-reassemble completion on `TextModel` (issue #847): the
+// paragraph- and fence-aware splitter plus the `complete_chunked` trait,
+// so a caller rewrites a long document in bounded, whole-block chunks
+// instead of hand-splitting one.
+mod text_chunks;
 mod tool_loop;
 mod usage;
 mod venture;
@@ -235,6 +240,8 @@ pub use tenant_conn::TenantConn;
 pub use tenant_lifecycle::{
     ErasureStep, TenantLifecycle, TenantLifecycleError, TenantSummary, remaining_erasure,
 };
+// The chunk-and-reassemble companion to `TextModelExt` (issue #847).
+pub use text_chunks::{TextModelChunkedExt, reassemble_text_chunks, split_text_chunks};
 pub use tool_loop::{
     StepUsage, ToolBudget, ToolExecutor, ToolLoopError, ToolLoopEvent, ToolLoopOutcome,
     run_tool_loop, run_tool_loop_stream,
