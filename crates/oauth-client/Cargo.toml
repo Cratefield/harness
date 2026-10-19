@@ -45,4 +45,7 @@ time = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 cratefield-testing = { workspace = true }
-cratefield-module-device-auth = { workspace = true }
+# Path-only on purpose: a versioned dev-dependency would make `cargo publish`
+# resolve `cratefield-module-device-auth` from the index before it is published
+# in the same release. See docs/RELEASING.md.
+cratefield-module-device-auth = { path = "../module-device-auth" }
