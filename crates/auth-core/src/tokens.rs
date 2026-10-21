@@ -357,6 +357,10 @@ struct AccessClaims<'a> {
     /// them (issue #912).
     #[serde(skip_serializing_if = "Option::is_none")]
     roles: Option<&'a [String]>,
+    /// The authentication context, present when the session spent a step-up
+    /// transaction (issue #912).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acr: Option<&'a str>,
 }
 
 /// The serialized ID-token claims (OpenID Connect Core section 2). The
@@ -384,6 +388,8 @@ struct IdClaims<'a> {
     email_verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     roles: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acr: Option<&'a str>,
 }
 
 fn b64url(bytes: &[u8]) -> String {
@@ -460,6 +466,7 @@ pub fn mint_access_token(
     amr: &[String],
     auth_time: i64,
     roles: Option<&[String]>,
+    acr: Option<&str>,
 ) -> Result<String, TokenError> {
     let now = clock.now().replace_nanosecond(0).expect("in range");
     let claims = AccessClaims {
@@ -475,6 +482,7 @@ pub fn mint_access_token(
         amr,
         auth_time,
         roles,
+        acr,
     };
     Ok(sign_jwt(keys, "at+jwt", &claims))
 }
@@ -504,6 +512,7 @@ pub fn mint_id_token(
     nonce: Option<&str>,
     roles: Option<&[String]>,
     session_id: &str,
+    acr: Option<&str>,
 ) -> Result<String, TokenError> {
     let now = clock.now().replace_nanosecond(0).expect("in range");
     let claims = IdClaims {
@@ -520,6 +529,7 @@ pub fn mint_id_token(
         email: user_email.map(|(email, _)| email),
         email_verified: user_email.map(|(_, verified)| verified),
         roles,
+        acr,
     };
     Ok(sign_jwt(keys, "JWT", &claims))
 }
@@ -1164,6 +1174,7 @@ mod tests {
             &amr,
             1_800_000_000,
             None,
+            None,
         )
         .expect("mint");
 
@@ -1216,6 +1227,7 @@ mod tests {
             &["sso".to_owned()],
             1_800_000_000,
             None,
+            None,
         )
         .expect("mint");
         let sso_claims = sso.split('.').nth(1).expect("claims");
@@ -1236,6 +1248,7 @@ mod tests {
             None,
             &[],
             1_800_000_000,
+            None,
             None,
         )
         .expect("mint");

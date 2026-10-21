@@ -550,16 +550,275 @@ async fn an_unrelated_later_login_cannot_satisfy_a_demand_it_did_not_begin() {
     assert_eq!(status, StatusCode::OK, "a login without the transaction");
 }
 
+/// The browser's step-up cookie value a chooser sets, if it sets one.
+fn browser_cookie_in(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|value| {
+            value
+                .strip_prefix("__Host-step-up=")
+                .map(|rest| rest.split(';').next().unwrap_or_default().to_owned())
+        })
+}
+
+/// A demand made before anyone is signed in: the chooser carries it, bound to
+/// the browser by a cookie. Returns the transaction and the cookie.
+async fn unbound_demand(kit: &TestHarness, client: &str, extra: &str) -> (String, String) {
+    let (status, headers, body) =
+        authorize(kit, client, &format!("&prompt=login{extra}"), None).await;
+    assert_eq!(status, StatusCode::OK, "{headers:?}");
+    let cookie = browser_cookie_in(&headers).expect("the chooser binds the browser");
+    (transaction_in(&body).expect("a transaction"), cookie)
+}
+
 #[pollster::test]
-async fn prompt_login_without_a_session_shows_the_chooser_without_a_transaction() {
+async fn prompt_login_without_a_session_makes_an_unbound_demand_for_this_browser() {
     let (kit, _clock) = kit();
     seed_user(&kit, "u1").await;
     let client = client(&kit, false).await;
+    let (_tx, cookie) = unbound_demand(&kit, &client, "").await;
+    assert!(!cookie.is_empty());
+    assert_eq!(transactions(&kit).await, 1);
+}
 
-    let (status, _, body) = authorize(&kit, &client, "&prompt=login", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(transaction_in(&body).is_none(), "no session, so no demand");
-    assert_eq!(transactions(&kit).await, 0);
+/// Probe D (issue #912, second review): with no session, `prompt=login` was
+/// dropped on the way to the login, and a federated sign-in then minted a code.
+#[pollster::test]
+async fn probe_d_no_session_prompt_login_is_not_met_by_a_federated_sign_in() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let client = client(&kit, false).await;
+    let (tx, cookie) = unbound_demand(&kit, &client, "&scope=openid").await;
+
+    clock_advance(&clock, 1);
+    let federated = session_now(&kit, &clock, "u1", &["federated"]).await;
+    // The browser that asked is the one returning, with its cookie: binding
+    // is not what refuses the federated sign-in, its method is.
+    let uri = format!(
+        "{BASE}/authorize?response_type=code&client_id={client}&redirect_uri={REDIRECT}\
+         &code_challenge={}&code_challenge_method=S256&state=xyz\
+         &prompt=login&scope=openid&step_up={tx}",
+        challenge()
+    );
+    let request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(
+            header::COOKIE,
+            format!("__Host-session={federated}; __Host-step-up={cookie}"),
+        );
+    let (status, headers, _) = send(&kit, request, axum::body::Body::empty()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "BYPASS: a federated sign-in met prompt=login: {headers:?}"
+    );
+    assert!(!is_code(&headers));
+}
+
+/// The same return path with a passkey ceremony, begun after the demand and
+/// carrying the browser's cookie, is met, and the session earns `acr`.
+#[pollster::test]
+async fn an_unbound_demand_is_met_by_a_passkey_ceremony_from_the_same_browser() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let client = client(&kit, false).await;
+    let (tx, cookie) = unbound_demand(&kit, &client, "&scope=openid").await;
+
+    clock_advance(&clock, 1);
+    let passkey = session_now(&kit, &clock, "u1", &["passkey", "user"]).await;
+    let uri = format!("&prompt=login&scope=openid&step_up={tx}");
+    // Without the browser's cookie the demand is not answered.
+    let (status, _, _) = authorize(&kit, &client, &uri, Some(&passkey)).await;
+    assert_eq!(status, StatusCode::OK, "another browser cannot answer it");
+
+    let mut request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri(format!(
+            "{BASE}/authorize?response_type=code&client_id={client}&redirect_uri={REDIRECT}\
+             &code_challenge={}&code_challenge_method=S256&state=xyz{uri}",
+            challenge()
+        ))
+        .header(
+            header::COOKIE,
+            format!("__Host-session={passkey}; __Host-step-up={cookie}"),
+        );
+    request = request.header(header::ACCEPT, "*/*");
+    let (status, headers, _) = send(&kit, request, axum::body::Body::empty()).await;
+    assert_eq!(
+        status,
+        StatusCode::FOUND,
+        "the browser that asked is answered"
+    );
+    let tokens = exchange_code(&kit, &client, &code_in(&location(&headers))).await;
+    assert_eq!(
+        claims_of(tokens["access_token"].as_str().expect("at"))["acr"],
+        "urn:cratefield:stepup"
+    );
+    assert_eq!(
+        claims_of(tokens["id_token"].as_str().expect("id"))["acr"],
+        "urn:cratefield:stepup"
+    );
+}
+
+/// Probe E (issue #912, second review): `max_age=N` is an age check and
+/// implies no method. It is documented here, so the claim is not mistaken for
+/// step-up: a federated sign-in ends a `max_age` window.
+#[pollster::test]
+async fn max_age_is_only_an_age_and_a_federated_sign_in_meets_it() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let client = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "u1", 3600, &["passkey", "user"]).await;
+    let (_, headers, _) = authorize(&kit, &client, "&max_age=60", Some(&old)).await;
+    assert!(!is_code(&headers));
+    clock_advance(&clock, 1);
+    let federated = session_now(&kit, &clock, "u1", &["federated"]).await;
+    let (_, headers, _) = authorize(&kit, &client, "&max_age=60", Some(&federated)).await;
+    assert!(
+        is_code(&headers),
+        "max_age is age-only; step-up callers use prompt=login"
+    );
+}
+
+/// Probe F (issue #912, second review): transaction abuse, one property each.
+#[pollster::test]
+async fn probe_f_transaction_abuse_is_refused_and_the_ceremony_rule_is_precise() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    seed_user(&kit, "u2").await;
+    let a = client(&kit, false).await;
+    let b = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "u1", 3600, &["passkey", "user"]).await;
+    let v1 = demand(&kit, &a, &old).await;
+    let v2 = demand(&kit, &a, &old).await;
+    let vb = demand(&kit, &b, &old).await;
+
+    // The session that was there before the demand, presenting its own.
+    let (status, headers, _) =
+        authorize(&kit, &a, &format!("&prompt=login&step_up={v1}"), Some(&old)).await;
+    assert_eq!(status, StatusCode::OK, "{headers:?}");
+
+    // A ceremony in the very same second, a millisecond after the demand, counts.
+    clock_advance_ms(&clock, 1);
+    let same_second = session_now(&kit, &clock, "u1", &["passkey", "user"]).await;
+    let (_, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={v1}"),
+        Some(&same_second),
+    )
+    .await;
+    assert!(
+        is_code(&headers),
+        "a ceremony one millisecond after the demand is met"
+    );
+
+    // Replay of the spent transaction is refused.
+    let (_, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={v1}"),
+        Some(&same_second),
+    )
+    .await;
+    assert!(!is_code(&headers), "replay");
+
+    // Client binding: a's transaction is not b's, and b's is bound to b.
+    let (_, headers, _) = authorize(
+        &kit,
+        &b,
+        &format!("&prompt=login&step_up={v2}"),
+        Some(&same_second),
+    )
+    .await;
+    assert!(!is_code(&headers), "a's transaction at b");
+
+    // One ceremony satisfies every open transaction of its account, one at a
+    // time: the second of a's transactions, and b's, are met by the same
+    // ceremony that met v1 (documented in the README).
+    let (_, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={v2}"),
+        Some(&same_second),
+    )
+    .await;
+    assert!(
+        is_code(&headers),
+        "a second open transaction of the account"
+    );
+    let (_, headers, _) = authorize(
+        &kit,
+        &b,
+        &format!("&prompt=login&step_up={vb}"),
+        Some(&same_second),
+    )
+    .await;
+    assert!(
+        is_code(&headers),
+        "b's transaction, same account, same ceremony"
+    );
+
+    // Another account's session does not answer a's demand.
+    let v3 = demand(&kit, &a, &old).await;
+    clock_advance(&clock, 2);
+    let u2 = session_now(&kit, &clock, "u2", &["passkey", "user"]).await;
+    let (_, headers, _) =
+        authorize(&kit, &a, &format!("&prompt=login&step_up={v3}"), Some(&u2)).await;
+    assert!(!is_code(&headers), "cross-account");
+
+    // A ceremony older than two minutes does not spend it.
+    let v4 = demand(&kit, &a, &old).await;
+    clock_advance(&clock, 1);
+    let stale = session_now(&kit, &clock, "u1", &["email"]).await;
+    clock_advance(&clock, 121);
+    let (_, headers, _) =
+        authorize(&kit, &a, &format!("&max_age=0&step_up={v4}"), Some(&stale)).await;
+    assert!(!is_code(&headers), "a 121-second-old ceremony");
+
+    // prompt=none: a transaction met by a fresh ceremony answers with a code,
+    // and with the session the demand was made on it is a refusal, not a page.
+    let v5 = demand(&kit, &a, &old).await;
+    let (_, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=none&max_age=0&step_up={v5}"),
+        Some(&old),
+    )
+    .await;
+    assert!(location(&headers).contains("error=login_required"));
+    clock_advance(&clock, 1);
+    let email = session_now(&kit, &clock, "u1", &["email"]).await;
+    let (_, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=none&max_age=0&step_up={v5}"),
+        Some(&email),
+    )
+    .await;
+    assert!(
+        is_code(&headers),
+        "no interaction is needed once the ceremony is met"
+    );
+
+    // A step_up value the client injects is never carried into the chooser.
+    let (_, _, body) = authorize(&kit, &a, "&prompt=login&step_up=INJECTED", None).await;
+    assert!(
+        !body.contains("INJECTED"),
+        "an injected transaction is dropped"
+    );
+    let (_, _, body) = authorize(&kit, &a, "&prompt=login&step_up=INJECTED", Some(&old)).await;
+    assert!(
+        !body.contains("INJECTED"),
+        "an injected transaction is dropped"
+    );
+}
+
+fn clock_advance_ms(clock: &ManualClock, ms: u64) {
+    clock.advance(std::time::Duration::from_millis(ms));
 }
 
 // ---------------------------------------------------- regressions: no bypass
@@ -1043,4 +1302,105 @@ async fn discovery_advertises_prompt_values_and_the_claims_it_emits() {
             "{claim} is not advertised"
         );
     }
+}
+
+/// Issue #912, second review: a passkey or address change in the last 24 hours
+/// stops the account's passkey and email ceremonies from passing a step-up, so
+/// a session that enrolled a credential cannot use it to pass one.
+#[pollster::test]
+async fn a_recent_passkey_change_stops_the_account_passing_a_step_up() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let client = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "u1", 600, &["passkey", "user"]).await;
+    let tx = demand(&kit, &client, &old).await;
+
+    // The account's passkeys changed just now.
+    cratefield_auth_core::record_security_change(&*kit.db, &clock, "u1")
+        .await
+        .expect("recorded");
+    clock_advance(&clock, 1);
+    let ceremony = session_now(&kit, &clock, "u1", &["passkey", "user"]).await;
+    let (_, headers, _) = authorize(
+        &kit,
+        &client,
+        &format!("&prompt=login&step_up={tx}"),
+        Some(&ceremony),
+    )
+    .await;
+    assert!(
+        !is_code(&headers),
+        "a passkey that changed today does not step up"
+    );
+
+    // A day later the account is quiet again, and the same kind of ceremony does.
+    let later_tx = {
+        clock_advance(&clock, 24 * 60 * 60);
+        demand(&kit, &client, &ceremony).await
+    };
+    clock_advance(&clock, 1);
+    let quiet = session_now(&kit, &clock, "u1", &["passkey", "user"]).await;
+    let (_, headers, _) = authorize(
+        &kit,
+        &client,
+        &format!("&prompt=login&step_up={later_tx}"),
+        Some(&quiet),
+    )
+    .await;
+    assert!(is_code(&headers), "a quiet day later the ceremony counts");
+}
+
+/// Issue #912, second review: an account holds at most twenty open demands,
+/// and the oldest are dropped when a new one would exceed that.
+#[pollster::test]
+async fn open_transactions_are_capped_per_account() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let client = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "u1", 600, &["passkey", "user"]).await;
+    let first = demand(&kit, &client, &old).await;
+    for _ in 0..24 {
+        demand(&kit, &client, &old).await;
+    }
+    let rows: Rows = kit
+        .db
+        .query(&Statement::new(
+            "SELECT id FROM step_up_transactions WHERE user_id = 'u1' AND consumed_at IS NULL"
+                .to_owned(),
+        ))
+        .await
+        .expect("count");
+    assert_eq!(rows.len(), 20, "at most twenty open demands");
+    // The oldest was dropped, so it no longer answers.
+    clock_advance(&clock, 1);
+    let ceremony = session_now(&kit, &clock, "u1", &["passkey", "user"]).await;
+    let (_, headers, _) = authorize(
+        &kit,
+        &client,
+        &format!("&prompt=login&step_up={first}"),
+        Some(&ceremony),
+    )
+    .await;
+    assert!(!is_code(&headers), "the dropped demand is gone");
+}
+
+/// Issue #912, second review: spent and expired transactions are purged when a
+/// new demand is made.
+#[pollster::test]
+async fn spent_and_expired_transactions_are_purged_on_the_next_demand() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let client = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "u1", 600, &["passkey", "user"]).await;
+    let _abandoned = demand(&kit, &client, &old).await;
+    clock_advance(&clock, 601);
+    let _next = demand(&kit, &client, &old).await;
+    let rows: Rows = kit
+        .db
+        .query(&Statement::new(
+            "SELECT id FROM step_up_transactions".to_owned(),
+        ))
+        .await
+        .expect("count");
+    assert_eq!(rows.len(), 1, "the expired demand was purged");
 }

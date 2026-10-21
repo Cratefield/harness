@@ -160,8 +160,12 @@ impl Kit {
         .expect("mark applies");
     }
 
-    /// A session cookie value for that account.
+    /// A session cookie value for that account. Signing in is the fresh
+    /// ceremony a passkey change needs, and a change makes the account's
+    /// passkeys count as no step-up for a day, so the clock moves past that
+    /// day first (issue #912, second review).
     pub async fn sign_in(&self, user_id: &str) -> String {
+        self.clock.advance_secs(24 * 60 * 60 + 1);
         issue(
             &*self.db,
             &*self.clock,
@@ -172,7 +176,7 @@ impl Kit {
                 user_agent: None,
                 presented_cookie: None,
                 presented_session_id: None,
-                amr: &["test"],
+                amr: &["passkey", "user"],
             },
         )
         .await

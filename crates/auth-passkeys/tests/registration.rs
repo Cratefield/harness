@@ -102,10 +102,10 @@ fn the_same_authenticator_cannot_be_registered_twice() {
     pollster::block_on(async {
         let kit = support::kit();
         let user = kit.user("nick@example.com").await;
-        let cookie = kit.sign_in(&user).await;
         let authenticator = SoftAuthenticator::new(Algorithm::Es256);
 
         for expected in [StatusCode::OK, StatusCode::CONFLICT] {
+            let cookie = kit.sign_in(&user).await;
             let options = post(&kit, OPTIONS, "{}", Some(&cookie)).await.json();
             let challenge = challenge_of(&options);
             let credential = authenticator.register(RP_ID, ORIGIN, &challenge);
@@ -121,6 +121,7 @@ fn the_same_authenticator_cannot_be_registered_twice() {
 
         // `excludeCredentials` is advice to the browser; the second attempt
         // proves the server enforces it too.
+        let cookie = kit.sign_in(&user).await;
         let options = post(&kit, OPTIONS, "{}", Some(&cookie)).await.json();
         let excluded = options["publicKey"]["excludeCredentials"]
             .as_array()
@@ -189,7 +190,9 @@ fn a_challenge_can_be_spent_once() {
         .await;
         assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.text());
 
-        // Same challenge, different authenticator: the row is gone.
+        // Same challenge, different authenticator: the row is gone. The second
+        // change of the test is a fresh ceremony (issue #912).
+        let cookie = kit.sign_in(&user).await;
         let replayed = post(
             &kit,
             VERIFY,
@@ -214,6 +217,7 @@ fn a_challenge_expires() {
 
         // Five minutes is the issue's number; a minute past it is dead.
         kit.clock.advance_secs(361);
+        let cookie = kit.sign_in(&user).await;
 
         let response = post(
             &kit,
@@ -233,7 +237,6 @@ fn a_challenge_issued_to_one_account_cannot_register_a_passkey_on_another() {
         let mallory = kit.user("mallory@example.com").await;
         let victim = kit.user("victim@example.com").await;
         let mallory_cookie = kit.sign_in(&mallory).await;
-        let victim_cookie = kit.sign_in(&victim).await;
         let authenticator = SoftAuthenticator::new(Algorithm::Es256);
 
         // Mallory's challenge, presented by the victim's session.
@@ -241,6 +244,7 @@ fn a_challenge_issued_to_one_account_cannot_register_a_passkey_on_another() {
             .await
             .json();
         let challenge = challenge_of(&options);
+        let victim_cookie = kit.sign_in(&victim).await;
         let response = post(
             &kit,
             VERIFY,
@@ -326,13 +330,13 @@ fn the_last_login_method_cannot_be_deleted() {
     pollster::block_on(async {
         let kit = support::kit();
         let user = kit.user("nick@example.com").await;
-        let cookie = kit.sign_in(&user).await;
 
         let mut ids = Vec::new();
         for (index, credential_id) in [b"first-id".as_slice(), b"second-id".as_slice()]
             .into_iter()
             .enumerate()
         {
+            let cookie = kit.sign_in(&user).await;
             let authenticator =
                 SoftAuthenticator::new(Algorithm::Es256).with_credential_id(credential_id);
             let options = post(&kit, OPTIONS, "{}", Some(&cookie)).await.json();
@@ -352,6 +356,7 @@ fn the_last_login_method_cannot_be_deleted() {
         }
 
         // The first of two goes.
+        let cookie = kit.sign_in(&user).await;
         let deleted = send(
             &kit,
             Method::DELETE,
@@ -363,6 +368,7 @@ fn the_last_login_method_cannot_be_deleted() {
         assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.text());
 
         // The last one does not: it is the only way back into the account.
+        let cookie = kit.sign_in(&user).await;
         let refused = send(
             &kit,
             Method::DELETE,
@@ -384,13 +390,13 @@ fn a_suspect_credential_does_not_count_as_a_way_back_in() {
     pollster::block_on(async {
         let kit = support::kit();
         let user = kit.user("nick@example.com").await;
-        let cookie = kit.sign_in(&user).await;
 
         let mut ids = Vec::new();
         for (index, credential_id) in [b"good-id".as_slice(), b"suspect-id".as_slice()]
             .into_iter()
             .enumerate()
         {
+            let cookie = kit.sign_in(&user).await;
             let authenticator =
                 SoftAuthenticator::new(Algorithm::Es256).with_credential_id(credential_id);
             let options = post(&kit, OPTIONS, "{}", Some(&cookie)).await.json();
@@ -412,6 +418,7 @@ fn a_suspect_credential_does_not_count_as_a_way_back_in() {
         // login and is not a way back into the account.
         kit.mark_suspect(&ids[1]).await;
 
+        let cookie = kit.sign_in(&user).await;
         let refused = send(
             &kit,
             Method::DELETE,
@@ -435,10 +442,9 @@ fn one_person_cannot_delete_another_persons_passkey() {
         let kit = support::kit();
         let owner = kit.user("owner@example.com").await;
         let stranger = kit.user("stranger@example.com").await;
-        let owner_cookie = kit.sign_in(&owner).await;
-        let stranger_cookie = kit.sign_in(&stranger).await;
         let authenticator = SoftAuthenticator::new(Algorithm::Es256);
 
+        let owner_cookie = kit.sign_in(&owner).await;
         let options = post(&kit, OPTIONS, "{}", Some(&owner_cookie)).await.json();
         let challenge = challenge_of(&options);
         let stored = post(
@@ -453,6 +459,7 @@ fn one_person_cannot_delete_another_persons_passkey() {
         .await;
         let id = stored.json()["id"].as_str().expect("id").to_owned();
 
+        let stranger_cookie = kit.sign_in(&stranger).await;
         let response = send(
             &kit,
             Method::DELETE,

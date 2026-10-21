@@ -206,6 +206,8 @@ async fn minted_response(
     let amr = amr_of(session);
     let auth_time = auth_time_of(session)?;
     let roles = roles_for(db, client_id, user).await?;
+    // The authentication context a step-up earned, if this session earned one.
+    let acr = store::session_acr(db, &session.id).await?;
     // The session's SSO connection (issue #627), named in the token only
     // while it still belongs to the client the token is for and is still
     // active: a connection is a fact about one venture's organization, so
@@ -232,6 +234,7 @@ async fn minted_response(
         &amr,
         auth_time,
         roles.as_deref(),
+        acr.as_deref(),
     )
     .map_err(|err| {
         tracing::error!(error = %err, "access-token mint failed");
@@ -255,6 +258,7 @@ async fn minted_response(
             nonce,
             roles.as_deref(),
             &session.id,
+            acr.as_deref(),
         )
         .map_err(|err| {
             tracing::error!(error = %err, "id-token mint failed");

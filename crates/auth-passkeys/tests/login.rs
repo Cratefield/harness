@@ -670,6 +670,9 @@ fn a_login_ceremony_cannot_be_replayed_into_registration_or_the_reverse() {
         let kit = support::kit();
         let mut authenticator = SoftAuthenticator::new(Algorithm::Es256);
         let user = account_with(&kit, "nick@example.com", &authenticator).await;
+        // Adding the passkey is a security change, so the account is quiet only
+        // a day on (issue #912, second review).
+        kit.clock.advance_secs(24 * 60 * 60);
         let cookie = kit.sign_in(&user).await;
 
         // A registration challenge presented at the login endpoint.

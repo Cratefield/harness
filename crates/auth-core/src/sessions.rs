@@ -340,6 +340,11 @@ async fn issue_for(
         },
     )
     .await?;
+    // To the millisecond, for the step-up check that a ceremony came after a
+    // demand made in the same second (issue #912, second review).
+    let created_ms =
+        i64::try_from(clock.now().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX);
+    store::set_session_created_ms(db, &session_id, created_ms).await?;
 
     audit("session.issue", login.user_id);
     Ok(IssuedSession {

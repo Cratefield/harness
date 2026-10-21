@@ -301,6 +301,7 @@ async fn access_tokens_carry_the_recommended_claims_and_verify() {
         &["user".to_owned(), "passkey".to_owned()],
         1_800_000_000,
         None,
+        None,
     )
     .expect("mint");
 
@@ -344,6 +345,7 @@ async fn rotation_overlaps_both_keys_and_signs_with_the_active_one() {
         None,
         &[],
         1_800_000_000,
+        None,
         None,
     )
     .expect("mint");

@@ -75,6 +75,37 @@ answers an ID token. `amr` values are the ones the login methods record:
 `email`, `pwd`, `federated`, `sso`. Only `passkey` and `email` satisfy a
 step-up.
 
+**Demands made before anyone is signed in.** With no session, `prompt=login`
+and `max_age=0` still make a transaction. It is bound to this browser by the
+`__Host-step-up` cookie the chooser sets (`HttpOnly`, ten minutes), and to the
+account whose ceremony answers it. A federated or SSO sign-in cannot answer
+it. A `login_hint` or a named connection never routes a step-up to the IdP.
+
+**What one ceremony satisfies.** One fresh passkey or email ceremony satisfies
+every transaction its account holds, one at a time: each request spends the
+transaction it presents, and the others stay open until used or expired (at
+most twenty open per account; the oldest are dropped). Spent and expired rows
+are purged when the next demand is made.
+
+**Timing.** The ceremony must begin after the demand, to the millisecond, and
+be at most two minutes old when the request returns.
+
+**Account changes.** Adding or removing a passkey, and changing the address,
+need a passkey or email ceremony at most two minutes old
+(`require_recent_ceremony`). A password is no longer a way to change the
+address. Every passkey change and address change moves the account's
+`security_changed_at`. For 24 hours after that, the account's passkey and
+email ceremonies do not satisfy a step-up or an account change, so a session
+that enrolled a credential cannot use it. The address is told of each passkey
+change (`auth-core/security-notice`), and the old address is told of each
+address change. Because the rule is per account, not per credential, a second
+passkey cannot be added on the same day as the first.
+
+**`max_age=N` is age only.** It implies no authentication method, so a
+federated sign-in can meet it. A caller that needs a passkey or an email
+ceremony uses `prompt=login`, and an approval gate checks `amr` as well (see
+`cratefield-auth-client`'s `stepped_up_within`).
+
 **Roles.** `users.role` is `owner`, `admin` or `member` (every account starts
 as `member`), set by `POST /admin/users/{sub}/role` under the admin bearer
 token and audited in `user_role_audit`. A client gets a `roles` claim,

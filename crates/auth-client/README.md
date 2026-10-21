@@ -24,10 +24,20 @@ relying party that is about to approve something (a payment, an offer, a
 change of ownership) must check that itself:
 
 ```ignore
-if !claims.authenticated_within(300, now) {
-    // ask the person to sign in again, with prompt=login
+if !claims.stepped_up_within(120, now) {
+    // ask the person to sign in again, with prompt=login and max_age=0
 }
 ```
+
+**Payment, signing and other irreversible gates must use
+`stepped_up_within`, not `authenticated_within`.** `authenticated_within`
+only checks the age of the last sign-in, whatever method it used. A
+federated (`sso`, `federated`) or password sign-in passes it, and the
+password was never proven fresh. `stepped_up_within` also requires a passkey
+or an email link in `amr`. The token's `acr` is `urn:cratefield:stepup` when
+the session spent a step-up transaction; that is a fact about the session,
+and a relying party may check it too, but the age and method check above is
+the one that decides.
 
 `auth_time` is epoch seconds of the person's last real sign-in ceremony. A
 refresh never moves it, so a long-lived session does not look fresh. `roles`

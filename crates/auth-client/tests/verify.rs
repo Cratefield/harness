@@ -597,3 +597,63 @@ async fn a_token_without_auth_time_is_never_fresh() {
     assert!(verified.roles.is_empty());
     assert!(!verified.authenticated_within(i64::MAX, NOW));
 }
+
+/// Issue #912, second review: a payment gate passes only a passkey or email
+/// ceremony that is recent. A federated, SSO or password sign-in does not,
+/// even when it is recent, and neither does an old passkey sign-in.
+#[pollster::test]
+async fn stepped_up_within_requires_a_recent_passkey_or_email() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let mint_with = |amr: Value, auth_time: i64| {
+        let mut payload = claims(CLIENT, ISSUER, NOW + 600);
+        payload["auth_time"] = json!(auth_time);
+        payload["amr"] = amr;
+        payload["acr"] = json!("urn:cratefield:stepup");
+        mint(
+            &signing,
+            &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+            &payload,
+        )
+    };
+    let passkey = auth
+        .verify(&mint_with(json!(["passkey", "user"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(passkey.stepped_up_within(120, NOW));
+    assert_eq!(passkey.acr.as_deref(), Some("urn:cratefield:stepup"));
+
+    let email = auth
+        .verify(&mint_with(json!(["email"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(email.stepped_up_within(120, NOW));
+
+    let federated = auth
+        .verify(&mint_with(json!(["federated"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(
+        !federated.stepped_up_within(120, NOW),
+        "a federated sign-in is not a step-up"
+    );
+    assert!(
+        federated.authenticated_within(120, NOW),
+        "it is recent, though"
+    );
+
+    let password = auth
+        .verify(&mint_with(json!(["pwd"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(!password.stepped_up_within(120, NOW));
+
+    let stale = auth
+        .verify(&mint_with(json!(["passkey"]), NOW - 600))
+        .await
+        .expect("verifies");
+    assert!(
+        !stale.stepped_up_within(120, NOW),
+        "an old passkey sign-in is not recent"
+    );
+}

@@ -56,6 +56,12 @@ async fn options(
     let session = require_session(&state, &headers, &scope).await?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
+    // Adding or removing a passkey needs a passkey or email ceremony in the
+    // last two minutes (issue #912, second review): a stolen session cannot
+    // enrol a passkey of its own.
+    cratefield_auth_core::require_recent_ceremony(db, clock, &session.id, &session.user_id)
+        .await
+        .map_err(|problem| problem.instance(&scope.request_id))?;
 
     let user = user_by_id(db, &session.user_id)
         .await
@@ -165,6 +171,7 @@ pub(crate) struct VerifyBody {
 const MAX_LABEL_CHARS: usize = 64;
 
 /// Step two: check the ceremony and store the credential.
+#[allow(clippy::too_many_lines)]
 async fn verify(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
@@ -177,6 +184,12 @@ async fn verify(
     let session = require_session(&state, &headers, &scope).await?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
+    // Adding or removing a passkey needs a passkey or email ceremony in the
+    // last two minutes (issue #912, second review): a stolen session cannot
+    // enrol a passkey of its own.
+    cratefield_auth_core::require_recent_ceremony(db, clock, &session.id, &session.user_id)
+        .await
+        .map_err(|problem| problem.instance(&scope.request_id))?;
 
     // Read as a value first, because the client extension results carry a
     // field the typed wire structs have no place for; a PRF result is
@@ -282,6 +295,17 @@ async fn verify(
             "user_verified": registered.user_verified,
         }),
     );
+
+    // A new passkey is a change to the account's sign-in: the next day's
+    // passkey and email ceremonies stop counting as a step-up, and the address
+    // is told (issue #912, second review).
+    if let Err(err) =
+        cratefield_auth_core::record_security_change(db, clock, &session.user_id).await
+    {
+        tracing::error!(error = %err, "could not record the passkey change");
+        return Err(internal(&scope));
+    }
+    cratefield_auth_core::notify_passkey_change(&state.ctx, &session.user_id, "added").await;
 
     // `prf` and `prfSalt` name what the row actually holds, so they are
     // only sent when it was written; a client that got neither reads the
@@ -421,7 +445,13 @@ async fn remove(
     Path(id): Path<String>,
 ) -> Result<Response, Problem> {
     let session = require_session(&state, &headers, &scope).await?;
-    let (db, _, _) = ports(&state)?;
+    let (db, clock, _) = ports(&state)?;
+    // Adding or removing a passkey needs a passkey or email ceremony in the
+    // last two minutes (issue #912, second review): a stolen session cannot
+    // enrol a passkey of its own.
+    cratefield_auth_core::require_recent_ceremony(db, clock, &session.id, &session.user_id)
+        .await
+        .map_err(|problem| problem.instance(&scope.request_id))?;
 
     let credentials = credentials_by_user(db, &session.user_id)
         .await
@@ -457,6 +487,13 @@ async fn remove(
             tracing::error!(error = %err, "could not delete the passkey");
             internal(&scope)
         })?;
+    if let Err(err) =
+        cratefield_auth_core::record_security_change(db, clock, &session.user_id).await
+    {
+        tracing::error!(error = %err, "could not record the passkey change");
+        return Err(internal(&scope));
+    }
+    cratefield_auth_core::notify_passkey_change(&state.ctx, &session.user_id, "removed").await;
     // The PRF salt row goes with its credential. A row that survived would
     // be inert — reads filter against live credentials — but inert rows
     // are still clutter.

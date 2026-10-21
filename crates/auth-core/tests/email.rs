@@ -156,7 +156,8 @@ async fn sign_in(kit: &TestHarness, user_id: &str, secs_ago: i64) -> String {
             user_agent: None,
             presented_cookie: None,
             presented_session_id: None,
-            amr: &[],
+            // A passkey ceremony: what a step-up session carries (issue #912).
+            amr: &["passkey", "user"],
         },
     )
     .await
@@ -599,45 +600,59 @@ fn confirming_revokes_the_accounts_other_sessions() {
 }
 
 /// The one thing the address change must not be reachable on: a session nobody
-/// re-proved. With a password credential the caller can re-prove it; without
-/// one there is nothing to re-prove with, so only a recent session gets through.
+/// re-proved. A password is no longer a way back in. Only a passkey or email
+/// ceremony at most two minutes old, on an account whose passkeys and address
+/// have been quiet for a day, changes the address (issue #912, second review).
 #[test]
-fn an_old_session_needs_the_password_back() {
+fn an_old_session_or_a_password_does_not_change_the_address() {
     pollster::block_on(async {
         for kit in kits() {
             account(&kit, "ada", OLD, true).await;
             account(&kit, "bob", "bob@example.test", false).await;
-            let old_with_password = sign_in(&kit, "ada", 2 * HOUR).await;
-            let old_without = sign_in(&kit, "bob", 2 * HOUR).await;
-            let fresh = sign_in(&kit, "bob", 60).await;
+            let old = sign_in(&kit, "ada", 2 * HOUR).await;
 
-            let refused = change(&kit, &old_with_password, json!({ "new_email": FRESH })).await;
+            let refused = change(&kit, &old, json!({ "new_email": FRESH })).await;
             assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text());
             assert!(refused.slug().ends_with("reauthentication-required"));
 
-            let wrong = change(
-                &kit,
-                &old_with_password,
-                json!({ "new_email": FRESH, "current_password": "not it" }),
-            )
-            .await;
-            assert_eq!(wrong.status, refused.status);
-            assert_eq!(wrong.json()["type"], refused.json()["type"]);
-
+            // The password, right or wrong, is not an alternative any more.
             let right = change(
                 &kit,
-                &old_with_password,
+                &old,
                 json!({ "new_email": FRESH, "current_password": PASSWORD }),
             )
             .await;
-            assert_eq!(right.status, StatusCode::ACCEPTED, "{}", right.text());
+            assert_eq!(right.status, StatusCode::FORBIDDEN, "{}", right.text());
 
-            // No password credential to re-enter: recency is all there is.
+            // A recent session that came through a federated sign-in is not a
+            // step-up either.
+            let federated = {
+                let at_now = at(EPOCH);
+                issue(
+                    &*kit.db,
+                    &at_now,
+                    &cratefield_core::UlidIdGen,
+                    Login {
+                        user_id: "bob",
+                        ip: None,
+                        user_agent: None,
+                        presented_cookie: None,
+                        presented_session_id: None,
+                        amr: &["federated"],
+                    },
+                )
+                .await
+                .expect("session")
+                .value
+            };
             let want = json!({ "new_email": "b@example.test" });
             assert_eq!(
-                change(&kit, &old_without, want.clone()).await.status,
+                change(&kit, &federated, want.clone()).await.status,
                 StatusCode::FORBIDDEN
             );
+
+            // A passkey ceremony a minute ago does.
+            let fresh = sign_in(&kit, "bob", 60).await;
             assert_eq!(
                 change(&kit, &fresh, want).await.status,
                 StatusCode::ACCEPTED

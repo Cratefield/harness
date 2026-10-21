@@ -2211,16 +2211,21 @@ pub(crate) async fn set_client_roles_claim(
     db.execute(&Statement::render(&update)).await
 }
 
-/// One `step_up_transactions` row: a demand for a fresh ceremony, made for
-/// one account and one client (issue #912).
+/// One `step_up_transactions` row: a demand for a fresh ceremony (issue
+/// #912). Bound to an account and client once it is made by a signed-in
+/// session; an unbound demand, made before anyone is signed in, belongs to
+/// the browser that asked (`browser_hash`) until the ceremony that answers it.
 #[derive(Debug, Clone)]
 pub(crate) struct StepUpRow {
     pub id: String,
-    pub user_id: String,
+    pub user_id: Option<String>,
     pub client_id: String,
     /// Hex SHA-256 of the transaction value. The value is never stored.
     pub token_hash: String,
+    pub browser_hash: Option<String>,
     pub created_at: String,
+    /// The demand's creation to the millisecond.
+    pub created_ms: i64,
     pub expires_at: String,
     pub consumed_at: Option<String>,
 }
@@ -2228,14 +2233,28 @@ pub(crate) struct StepUpRow {
 fn step_up_from(row: &Row) -> StepUpRow {
     StepUpRow {
         id: row.get::<String>("id").unwrap_or_default(),
-        user_id: row.get::<String>("user_id").unwrap_or_default(),
+        user_id: optional::<String>(row, "user_id"),
         client_id: row.get::<String>("client_id").unwrap_or_default(),
         token_hash: row.get::<String>("token_hash").unwrap_or_default(),
+        browser_hash: optional::<String>(row, "browser_hash"),
         created_at: row.get::<String>("created_at").unwrap_or_default(),
+        created_ms: optional_i64(row, "created_ms").unwrap_or(0),
         expires_at: row.get::<String>("expires_at").unwrap_or_default(),
         consumed_at: optional::<String>(row, "consumed_at"),
     }
 }
+
+const STEP_UP_COLUMNS: [&str; 9] = [
+    "id",
+    "user_id",
+    "client_id",
+    "token_hash",
+    "browser_hash",
+    "created_at",
+    "created_ms",
+    "expires_at",
+    "consumed_at",
+];
 
 /// Records a new step-up transaction.
 ///
@@ -2246,21 +2265,15 @@ pub(crate) async fn insert_step_up(db: &dyn Database, row: &StepUpRow) -> Result
     let mut insert = Query::insert();
     insert
         .into_table(iden("step_up_transactions"))
-        .columns([
-            "id",
-            "user_id",
-            "client_id",
-            "token_hash",
-            "created_at",
-            "expires_at",
-            "consumed_at",
-        ])
+        .columns(STEP_UP_COLUMNS)
         .values_panic([
             row.id.clone().into(),
             row.user_id.clone().into(),
             row.client_id.clone().into(),
             row.token_hash.clone().into(),
+            row.browser_hash.clone().into(),
             row.created_at.clone().into(),
+            row.created_ms.into(),
             row.expires_at.clone().into(),
             Option::<String>::None.into(),
         ]);
@@ -2268,8 +2281,8 @@ pub(crate) async fn insert_step_up(db: &dyn Database, row: &StepUpRow) -> Result
     Ok(())
 }
 
-/// Finds a step-up transaction by the hash of the value carried through
-/// the login.
+/// Finds a step-up transaction by the hash of the value carried through the
+/// login.
 ///
 /// # Errors
 ///
@@ -2279,15 +2292,7 @@ pub(crate) async fn step_up_by_hash(
     token_hash: &str,
 ) -> Result<Option<StepUpRow>, DbError> {
     let query = Query::select()
-        .columns([
-            "id",
-            "user_id",
-            "client_id",
-            "token_hash",
-            "created_at",
-            "expires_at",
-            "consumed_at",
-        ])
+        .columns(STEP_UP_COLUMNS)
         .from(iden("step_up_transactions"))
         .and_where(Expr::col(iden("token_hash")).eq(token_hash))
         .limit(1)
@@ -2296,9 +2301,9 @@ pub(crate) async fn step_up_by_hash(
     Ok(rows.first().map(step_up_from))
 }
 
-/// Spends a step-up transaction, if nobody has. The guard is in the
-/// statement, so of two requests racing on one transaction exactly one
-/// gets `1` back. Returns the rows changed.
+/// Spends a step-up transaction, if nobody has, and binds it to the account
+/// whose ceremony spent it. The guard is in the statement, so of two requests
+/// racing on one transaction exactly one gets `1` back.
 ///
 /// # Errors
 ///
@@ -2306,13 +2311,183 @@ pub(crate) async fn step_up_by_hash(
 pub(crate) async fn consume_step_up(
     db: &dyn Database,
     id: &str,
+    user_id: &str,
     now: &str,
 ) -> Result<u64, DbError> {
     let mut update = Query::update();
     update
         .table(iden("step_up_transactions"))
-        .values([(iden("consumed_at"), now.into())])
+        .values([
+            (iden("consumed_at"), now.into()),
+            (iden("user_id"), user_id.into()),
+        ])
         .and_where(Expr::col(iden("id")).eq(id))
         .and_where(Expr::col(iden("consumed_at")).is_null());
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Open (unspent, unexpired) transactions bound to an account, oldest first.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn open_step_ups_for_user(
+    db: &dyn Database,
+    user_id: &str,
+    now: &str,
+) -> Result<Vec<String>, DbError> {
+    let query = Query::select()
+        .column(iden("id"))
+        .from(iden("step_up_transactions"))
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("consumed_at")).is_null())
+        .and_where(Expr::col(iden("expires_at")).gt(now))
+        .order_by(iden("created_ms"), sea_query::Order::Asc)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .rows
+        .iter()
+        .filter_map(|row| row.get::<String>("id"))
+        .collect())
+}
+
+/// Deletes one step-up transaction.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn delete_step_up(db: &dyn Database, id: &str) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete
+        .from_table(iden("step_up_transactions"))
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&delete)).await
+}
+
+/// Removes every transaction that is spent or has expired: the lazy purge
+/// that runs when a new one is made.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn purge_step_ups(db: &dyn Database, now: &str) -> Result<u64, DbError> {
+    let mut delete = Query::delete();
+    delete.from_table(iden("step_up_transactions")).cond_where(
+        sea_query::Cond::any()
+            .add(Expr::col(iden("expires_at")).lte(now))
+            .add(Expr::col(iden("consumed_at")).is_not_null()),
+    );
+    db.execute(&Statement::render(&delete)).await
+}
+
+/// Records the authentication context a session earned by spending a
+/// step-up transaction.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn set_session_acr(
+    db: &dyn Database,
+    id: &str,
+    acr: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([(iden("acr"), acr.into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// The authentication context a session earned, if it spent a step-up.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn session_acr(db: &dyn Database, id: &str) -> Result<Option<String>, DbError> {
+    let query = Query::select()
+        .column(iden("acr"))
+        .from(iden("sessions"))
+        .and_where(Expr::col(iden("id")).eq(id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.first().and_then(|row| optional::<String>(row, "acr")))
+}
+
+/// Records a session's creation time to the millisecond.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn set_session_created_ms(
+    db: &dyn Database,
+    id: &str,
+    ms: i64,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("sessions"))
+        .values([(iden("created_ms"), ms.into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// A session's creation time to the millisecond, if it was recorded.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn session_created_ms(
+    db: &dyn Database,
+    id: &str,
+) -> Result<Option<i64>, DbError> {
+    let query = Query::select()
+        .column(iden("created_ms"))
+        .from(iden("sessions"))
+        .and_where(Expr::col(iden("id")).eq(id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.first().and_then(|row| optional_i64(row, "created_ms")))
+}
+
+/// When the account's passkeys or address last changed, if ever.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn security_changed_at(
+    db: &dyn Database,
+    user_id: &str,
+) -> Result<Option<String>, DbError> {
+    let query = Query::select()
+        .column(iden("security_changed_at"))
+        .from(iden("users"))
+        .and_where(Expr::col(iden("id")).eq(user_id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| optional::<String>(row, "security_changed_at")))
+}
+
+/// Records that the account's passkeys or address just changed.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn set_security_changed_at(
+    db: &dyn Database,
+    user_id: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([(iden("security_changed_at"), now.into())])
+        .and_where(Expr::col(iden("id")).eq(user_id));
     db.execute(&Statement::render(&update)).await
 }

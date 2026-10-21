@@ -55,6 +55,10 @@
     "file": "0017_auth-core_0014_step_up_transactions.sql",
     "sha256": "9d27665bf7d1fc5371bbbabf9bef04ffd32e20dae8e1c01187685f860461f7c9"
   },
+  "auth-core/0015": {
+    "file": "0018_auth-core_0015_step_up_hardening.sql",
+    "sha256": "8876a0706771b531d2c2e8732308f30e39e9e08f80b0bdc939f8c50fd108c2fb"
+  },
   "auth-magic-link/0001": {
     "file": "0012_auth-magic-link_0001_send_cooldown.sql",
     "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"

@@ -84,9 +84,27 @@ pub struct Claims {
     /// otherwise.
     #[serde(default)]
     pub roles: Vec<String>,
+    /// The authentication context (`acr`), `urn:cratefield:stepup` when the
+    /// session spent a step-up transaction (issue #912). Absent otherwise.
+    #[serde(default)]
+    pub acr: Option<String>,
 }
 
 impl Claims {
+    /// Whether the person proved who they are with a passkey or an email link
+    /// within the last `max_age_secs` seconds, measured from `now` (issue
+    /// #912). This is the check a payment, signature or other irreversible
+    /// approval gates on: a password, a federated sign-in or an old login does
+    /// not pass it, however recent. `false` when the token has no `auth_time`.
+    #[must_use]
+    pub fn stepped_up_within(&self, max_age_secs: i64, now: i64) -> bool {
+        self.authenticated_within(max_age_secs, now)
+            && self
+                .amr
+                .iter()
+                .any(|method| method == "passkey" || method == "email")
+    }
+
     /// Whether the person authenticated within the last `max_age_secs`
     /// seconds, measured from `now` (epoch seconds, taken from the caller's
     /// clock). `false` when the token has no `auth_time`.
