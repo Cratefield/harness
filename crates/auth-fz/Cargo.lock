@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-mail-templates"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "cratefield-core",
  "getrandom 0.4.3",
