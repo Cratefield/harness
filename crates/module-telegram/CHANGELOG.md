@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/Cratefield/harness/compare/cratefield-module-telegram-v0.1.3...cratefield-module-telegram-v0.1.4) - 2026-10-21
+
+### Other
+
+- updated the following local packages: cratefield-module-notifications
+
 ## [0.1.3](https://github.com/Cratefield/harness/compare/cratefield-module-telegram-v0.1.2...cratefield-module-telegram-v0.1.3) - 2026-10-21
 
 ### Other
