@@ -78,19 +78,43 @@ pub(crate) struct SubscriberRow {
 }
 
 fn row_from(row: &Row) -> SubscriberRow {
+    let id = row.get::<String>("id").unwrap_or_else(|| {
+        tracing::error!("failed to extract id from database row");
+        String::new()
+    });
+    let email = row.get::<String>("email").unwrap_or_else(|| {
+        tracing::error!("failed to extract email from database row");
+        String::new()
+    });
+    let email_normalized = row.get::<String>("email_normalized").unwrap_or_else(|| {
+        tracing::error!("failed to extract email_normalized from database row");
+        String::new()
+    });
+    let status = row.get::<String>("status").unwrap_or_else(|| {
+        tracing::error!("failed to extract status from database row");
+        String::new()
+    });
+    let created_at = row.get::<String>("created_at").unwrap_or_else(|| {
+        tracing::error!("failed to extract created_at timestamp from database row");
+        "1970-01-01T00:00:00Z".to_owned()
+    });
+    let updated_at = row.get::<String>("updated_at").unwrap_or_else(|| {
+        tracing::error!("failed to extract updated_at timestamp from database row");
+        "1970-01-01T00:00:00Z".to_owned()
+    });
     SubscriberRow {
-        id: row.get::<String>("id").unwrap_or_default(),
-        email: row.get::<String>("email").unwrap_or_default(),
-        email_normalized: row.get::<String>("email_normalized").unwrap_or_default(),
-        status: row.get::<String>("status").unwrap_or_default(),
+        id,
+        email,
+        email_normalized,
+        status,
         generation: row.get::<i64>("generation").unwrap_or(1),
         source: row.get::<Option<String>>("source").flatten(),
         locale: row.get::<Option<String>>("locale").flatten(),
         confirmed_at: row.get::<Option<String>>("confirmed_at").flatten(),
         unsubscribed_at: row.get::<Option<String>>("unsubscribed_at").flatten(),
         unsubscribe_token: row.get::<Option<String>>("unsubscribe_token").flatten(),
-        created_at: row.get::<String>("created_at").unwrap_or_default(),
-        updated_at: row.get::<String>("updated_at").unwrap_or_default(),
+        created_at,
+        updated_at,
     }
 }
 

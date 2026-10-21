@@ -46,7 +46,12 @@ fn sea_to_sqlite(value: &SeaValue) -> SqliteValue {
         SeaValue::SmallUnsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
         SeaValue::Unsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
         SeaValue::BigUnsigned(v) => v.map_or(null, |v| {
-            SqliteValue::Integer(i64::try_from(v).unwrap_or(i64::MAX))
+            if let Ok(i) = i64::try_from(v) {
+                SqliteValue::Integer(i)
+            } else {
+                tracing::error!("BigUnsigned overflow: {} exceeds i64::MAX", v);
+                SqliteValue::Integer(i64::MAX)
+            }
         }),
         SeaValue::Float(v) => v.map_or(null, |v| SqliteValue::Real(f64::from(v))),
         SeaValue::Double(v) => v.map_or(null, SqliteValue::Real),

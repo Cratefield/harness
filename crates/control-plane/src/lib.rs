@@ -21,7 +21,13 @@ use cratefield_runtime_cloudflare::{
 };
 use worker::{Context, Env, Request, Response, event};
 
-static INSTANCE: OnceLock<(Harness, Cloudflare)> = OnceLock::new();
+type Instance = (Harness, Cloudflare);
+
+/// The control-plane instance, or `None` when harness initialization fails.
+/// The `Option` is cached so a misconfigured deployment answers 500 from the
+/// first request on: it is built — and its reason logged — once (ADR 0007:
+/// no ambient request state; the isolate is built once).
+static INSTANCE: OnceLock<Option<Instance>> = OnceLock::new();
 
 /// The Workers Rate Limiting binding (`[[ratelimits]]` in `wrangler.toml`).
 /// Readiness refuses every `/v1` route of a production deployment with
@@ -62,44 +68,57 @@ fn runtime_for(env: &Env) -> Cloudflare {
     }
 }
 
+/// Builds the composed control plane. Logs any initialization errors and
+/// returns `None` rather than panicking. The build is performed once per
+/// isolate and cached (ADR 0007: no ambient request state, the scope travels
+/// with the request).
+fn build(env: &Env) -> Option<Instance> {
+    let failed = |reason: String| {
+        worker::console_error!("control-plane harness initialization failed: {reason}");
+        None
+    };
+    let runtime = runtime_for(env);
+    let harness = match Harness::builder()
+        .venture(
+            Venture::new("cratefield-control-plane", "cratefield.com")
+                .public_url("https://app.cratefield.com")
+                .cors_origins(["https://app.cratefield.com"]),
+        )
+        // The console (#3): session guard, login skeleton, operator
+        // allowlist. More modules land with the wizard (#8) and dashboard
+        // (#11).
+        // The shared page chrome (the stylesheet every screen links).
+        // Mounted first so it is obvious that it is the frame, not a
+        // feature.
+        .module(cratefield_chrome::Chrome)
+        .module(cratefield_console::Console)
+        // The account dashboard (#11): ventures, health verdicts,
+        // connections, archiving. Read-only except archiving; see
+        // docs/DASHBOARD.md for the half that is not built.
+        //
+        // No KMS is wired here on purpose: the Workers runtime has no
+        // filesystem for `LocalFileKms` and no managed KMS adapter
+        // exists yet (its own issue, deliberately not invented in the
+        // pass that added the secrets screen). The dashboard carries
+        // `None` and the secrets screen renders that state honestly
+        // rather than failing — `Some(kms)` arrives with the adapter.
+        .module(cratefield_dashboard::Dashboard::default())
+        .runtime(runtime.clone())
+        .build()
+    {
+        Ok(harness) => harness,
+        Err(err) => return failed(err.to_string()),
+    };
+    Some((harness, runtime))
+}
+
 /// The composed control plane. One instance per isolate; the harness is
 /// built once and reused (ADR 0007: no ambient request state, the scope
 /// travels with the request). The `Env` is read only on the first event,
 /// for the mailer key; a rotated key reaches a fresh isolate, which every
-/// `wrangler secret put` starts.
-fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
-    INSTANCE.get_or_init(|| {
-        let runtime = runtime_for(env);
-        let harness = Harness::builder()
-            .venture(
-                Venture::new("cratefield-control-plane", "cratefield.com")
-                    .public_url("https://app.cratefield.com")
-                    .cors_origins(["https://app.cratefield.com"]),
-            )
-            // The console (#3): session guard, login skeleton, operator
-            // allowlist. More modules land with the wizard (#8) and dashboard
-            // (#11).
-            // The shared page chrome (the stylesheet every screen links).
-            // Mounted first so it is obvious that it is the frame, not a
-            // feature.
-            .module(cratefield_chrome::Chrome)
-            .module(cratefield_console::Console)
-            // The account dashboard (#11): ventures, health verdicts,
-            // connections, archiving. Read-only except archiving; see
-            // docs/DASHBOARD.md for the half that is not built.
-            //
-            // No KMS is wired here on purpose: the Workers runtime has no
-            // filesystem for `LocalFileKms` and no managed KMS adapter
-            // exists yet (its own issue, deliberately not invented in the
-            // pass that added the secrets screen). The dashboard carries
-            // `None` and the secrets screen renders that state honestly
-            // rather than failing — `Some(kms)` arrives with the adapter.
-            .module(cratefield_dashboard::Dashboard::default())
-            .runtime(runtime.clone())
-            .build()
-            .expect("the control-plane harness is valid");
-        (harness, runtime)
-    })
+/// `wrangler secret put` starts. Returns `None` if initialization failed.
+fn instance(env: &Env) -> Option<&'static Instance> {
+    INSTANCE.get_or_init(|| build(env)).as_ref()
 }
 
 #[event(fetch)]
@@ -107,16 +126,22 @@ fn instance(env: &Env) -> &'static (Harness, Cloudflare) {
 ///
 /// # Errors
 ///
-/// Propagates `worker::Error` from the harness router.
+/// Propagates `worker::Error` from the harness router or boot configuration.
 pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Response> {
-    let (harness, runtime) = instance(&env);
+    let Some((harness, runtime)) = instance(&env) else {
+        return Err(worker::Error::RustError(
+            "control-plane harness initialization failed".to_owned(),
+        ));
+    };
     serve(harness, runtime, req, env, ctx).await
 }
 
 #[event(scheduled)]
+/// Worker scheduled entry point.
 pub async fn scheduled(event: worker::ScheduledEvent, env: Env, ctx: worker::ScheduleContext) {
-    let (harness, runtime) = instance(&env);
-    serve_scheduled(harness, runtime, event, env, ctx).await;
+    if let Some((harness, runtime)) = instance(&env) {
+        serve_scheduled(harness, runtime, event, env, ctx).await;
+    }
 }
 
 #[cfg(test)]
