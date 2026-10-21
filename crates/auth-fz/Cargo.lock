@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-sqlite"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "cratefield-core",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-oauth-client"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "base64 0.23.1",
  "bytes",

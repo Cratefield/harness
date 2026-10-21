@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-sqlite"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "cratefield-core",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-auth-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-oauth-client"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-native"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "async-trait",
  "axum",
