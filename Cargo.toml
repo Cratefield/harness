@@ -372,8 +372,11 @@ intl-memoizer = "0.5.3"
 # Identifiers and time.
 ulid = "3.0.0"
 # Compiled mail templates for the modules (issue #12); pure build-time
-# rendering, wasm-safe.
-askama = "0.14.0"
+# rendering, wasm-safe. `default-features = false` drops askama's `config`
+# feature (askama.toml parsing), which is the only path to `basic-toml`
+# (RUSTSEC-2026-0374, unmaintained, no patched release). The repo has no
+# askama.toml, so the template output is unchanged.
+askama = { version = "0.14.0", default-features = false, features = ["derive", "std", "urlencode"] }
 # `wasm-bindgen` makes OffsetDateTime::now_utc() use JS Date on wasm;
 # without it, now() panics ("time not implemented on this platform").
 time = { version = "0.3.45", default-features = false, features = [

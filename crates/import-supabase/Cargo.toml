@@ -46,7 +46,7 @@ url = { workspace = true, features = ["std"] }
 sqlx = { version = "0.8.6", default-features = false, features = [
     "postgres",
     "runtime-tokio",
-    "tls-rustls",
+    "tls-rustls-ring-native-roots",
 ] }
 
 [dev-dependencies]

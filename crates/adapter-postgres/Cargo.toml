@@ -27,14 +27,16 @@ futures-util = { version = "0.3.34", default-features = false, features = [
 
 # Native only (issue #18): the sqlx driver does not compile to wasm, so it
 # is gated to non-wasm targets and `src/lib.rs` fails the crate fast with a
-# clear message on any wasm target. `tls-rustls` pulls rustls with the
-# `ring` provider — no aws-lc, no cmake dependency.
+# clear message on any wasm target. `tls-rustls-ring-native-roots` pulls
+# rustls with the `ring` provider and the OS trust store — no aws-lc, no
+# cmake dependency, and no bundled webpki-roots (webpki-roots 0.26 has no
+# patched release; RUSTSEC-2026-0381).
 [target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dependencies]
 tokio = { workspace = true, features = ["sync"] }
 sqlx = { version = "0.8.6", default-features = false, features = [
     "postgres",
     "runtime-tokio",
-    "tls-rustls",
+    "tls-rustls-ring-native-roots",
 ] }
 
 [dev-dependencies]
