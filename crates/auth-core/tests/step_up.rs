@@ -36,6 +36,7 @@ const REDIRECT: &str = "https://undercoverrockstars.com/auth/callback";
 const VERIFIER: &str = "a-verifier-of-at-least-43-characters-1234567890";
 const ADMIN: &str = "test-admin-token-0123456789abcdef";
 const BASE: &str = "/v1/auth-core";
+const STEP_UP_ACR: &str = "urn:cratefield:stepup";
 
 fn iso(secs: i64) -> String {
     OffsetDateTime::from_unix_timestamp(secs)
@@ -1403,4 +1404,290 @@ async fn spent_and_expired_transactions_are_purged_on_the_next_demand() {
         .await
         .expect("count");
     assert_eq!(rows.len(), 1, "the expired demand was purged");
+}
+
+/// The same router as [`kit`], with the rate limiter the test names.
+fn kit_limited(limiter: cratefield_testing::FakeRateLimiter) -> (TestHarness, ManualClock) {
+    let clock =
+        ManualClock::new(OffsetDateTime::from_unix_timestamp(EPOCH - 600).expect("epoch in range"));
+    let config = MapConfig::from_pairs([
+        (
+            "AUTH_CORE_SIGNING_KEYS",
+            serde_json::to_string(&vec![dummy_key("k1")]).expect("keys json"),
+        ),
+        ("AUTH_CORE_SIGNING_KEY_ACTIVE", "k1".to_owned()),
+        ("AUTH_CORE_ISSUER", ISSUER.to_owned()),
+        ("ADMIN_TOKEN", ADMIN.to_owned()),
+        ("AUTH_CORE_LOGIN_METHODS", "google,magic-link".to_owned()),
+    ]);
+    let router_clock = clock.clone();
+    let kit = TestHarness::with_ports(vec![Box::new(AuthCore::new())], move |ports| {
+        ports.config = Arc::new(config);
+        ports.clock = Some(Arc::new(router_clock));
+        ports.rate_limiter = Some(Arc::new(limiter));
+    });
+    (kit, clock)
+}
+
+/// Probe G (issue #912, third review): the context a step-up earned is the
+/// code's, not the session's. A refresh days later, or another client's code on
+/// the same session, must not carry `acr`.
+#[pollster::test]
+async fn acr_belongs_to_the_code_that_spent_the_transaction() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let a = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "u1", 3600, &["passkey", "user"]).await;
+    let v = demand(&kit, &a, &old).await;
+    clock_advance_ms(&clock, 1000);
+    let fresh = session_now(&kit, &clock, "u1", &["passkey", "user"]).await;
+    let (status, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=login&scope=openid&step_up={v}"),
+        Some(&fresh),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FOUND);
+    let tokens = exchange_code(&kit, &a, &code_in(&location(&headers))).await;
+    assert_eq!(
+        claims_of(tokens["access_token"].as_str().expect("at"))["acr"],
+        STEP_UP_ACR
+    );
+    assert_eq!(
+        claims_of(tokens["id_token"].as_str().expect("id"))["acr"],
+        STEP_UP_ACR
+    );
+
+    // Three days later the refresh carries no context.
+    clock.advance(std::time::Duration::from_hours(3 * 24));
+    let refreshed = refresh(&kit, &a, tokens["refresh_token"].as_str().expect("rt")).await;
+    assert!(
+        claims_of(refreshed["access_token"].as_str().expect("at"))
+            .get("acr")
+            .is_none(),
+        "a refresh never carries the step-up context"
+    );
+
+    // Another client's ordinary request on the same session carries none either.
+    let b = client(&kit, false).await;
+    let (status, headers, _) = authorize(&kit, &b, "&scope=openid", Some(&fresh)).await;
+    assert_eq!(status, StatusCode::FOUND);
+    let other = exchange_code(&kit, &b, &code_in(&location(&headers))).await;
+    assert!(
+        claims_of(other["access_token"].as_str().expect("at"))
+            .get("acr")
+            .is_none(),
+        "another client's code carries none"
+    );
+}
+
+/// Probe H (issue #912, third review): during the 24-hour quiet period a plain
+/// email login is a sign-in, not a step-up: its token carries no `acr`.
+#[pollster::test]
+async fn a_plain_login_in_the_quiet_period_carries_no_step_up_context() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "u1").await;
+    let a = client(&kit, false).await;
+    cratefield_auth_core::record_security_change(&*kit.db, &clock, "u1")
+        .await
+        .expect("recorded");
+    clock_advance_ms(&clock, 1000);
+    let email = session_now(&kit, &clock, "u1", &["email"]).await;
+    let (status, headers, _) = authorize(&kit, &a, "&scope=openid", Some(&email)).await;
+    assert_eq!(status, StatusCode::FOUND);
+    let tokens = exchange_code(&kit, &a, &code_in(&location(&headers))).await;
+    assert!(
+        claims_of(tokens["access_token"].as_str().expect("at"))
+            .get("acr")
+            .is_none()
+    );
+}
+
+/// Probe I (issue #912, third review): anonymous demands are rate-limited per
+/// caller, and capped per client.
+#[pollster::test]
+async fn anonymous_demands_are_rate_limited_per_caller() {
+    // One allowance covers registering the client; every demand after it is
+    // refused.
+    let allowed = cratefield_core::Decision {
+        ok: true,
+        retry_after: None,
+        quota: None,
+    };
+    let limiter = cratefield_testing::FakeRateLimiter::scripted(
+        vec![allowed; 1],
+        cratefield_core::Decision {
+            ok: false,
+            retry_after: None,
+            quota: None,
+        },
+    );
+    let (kit, _clock) = kit_limited(limiter.clone());
+    let a = client(&kit, false).await;
+    let (status, _, _) = authorize(&kit, &a, "&prompt=login", None).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        transactions(&kit).await,
+        0,
+        "a refused demand stores nothing"
+    );
+}
+
+#[pollster::test]
+async fn anonymous_demands_are_capped_per_client() {
+    let (kit, _clock) = kit();
+    let a = client(&kit, false).await;
+    for _ in 0..1000 {
+        let (status, _, _) = authorize(&kit, &a, "&prompt=login", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert_eq!(transactions(&kit).await, 1000);
+    let (_, headers, _) = authorize(&kit, &a, "&prompt=login", None).await;
+    assert!(location(&headers).contains("error=temporarily_unavailable"));
+    assert_eq!(
+        transactions(&kit).await,
+        1000,
+        "the refused one stores nothing"
+    );
+}
+
+/// Probe J (issue #912, third review): a demand made before anyone is signed
+/// in is answered only by the browser that asked, and a `login_hint` binds it to
+/// the account it names at creation, so a login CSRF cannot spend it.
+#[pollster::test]
+async fn a_pre_sign_in_demand_is_answered_only_by_its_browser_and_its_account() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "victim").await;
+    seed_user(&kit, "attacker").await;
+    let a = client(&kit, false).await;
+
+    // Browser cookie binding.
+    let (_, headers, body) = authorize(&kit, &a, "&prompt=login", None).await;
+    let cookie = browser_cookie_of(&headers);
+    let tx = transaction_in(&body).expect("a transaction");
+    clock_advance_ms(&clock, 1000);
+    let session = session_now(&kit, &clock, "victim", &["passkey", "user"]).await;
+    let (_, headers, _) = authorize_with(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={tx}"),
+        &format!("__Host-session={session}"),
+    )
+    .await;
+    assert!(!is_code(&headers), "no browser cookie, no answer");
+    let (_, headers, _) = authorize_with(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={tx}"),
+        &format!("__Host-session={session}; __Host-step-up=someone-elses"),
+    )
+    .await;
+    assert!(!is_code(&headers), "another browser's cookie, no answer");
+    let (_, headers, _) = authorize_with(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={tx}"),
+        &format!("__Host-session={session}; __Host-step-up={cookie}"),
+    )
+    .await;
+    assert!(is_code(&headers), "the browser that asked answers it");
+
+    // Login CSRF: a demand the victim's browser holds, named for the victim,
+    // answered by the attacker's account.
+    let (_, headers, body) = authorize(
+        &kit,
+        &a,
+        "&prompt=login&login_hint=victim%40example.com",
+        None,
+    )
+    .await;
+    let victim_cookie = browser_cookie_of(&headers);
+    let victim_tx = transaction_in(&body).expect("a transaction");
+    clock_advance_ms(&clock, 1000);
+    let attacker = session_now(&kit, &clock, "attacker", &["email"]).await;
+    let (_, headers, _) = authorize_with(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={victim_tx}"),
+        &format!("__Host-session={attacker}; __Host-step-up={victim_cookie}"),
+    )
+    .await;
+    assert!(
+        !is_code(&headers),
+        "the attacker's account does not answer the victim's demand"
+    );
+}
+
+/// The value of this browser's step-up cookie in a response, if it set one.
+fn browser_cookie_of(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|value| {
+            value
+                .strip_prefix("__Host-step-up=")
+                .map(|rest| rest.split(';').next().unwrap_or_default().to_owned())
+        })
+        .expect("the chooser binds the browser")
+}
+
+/// `/authorize` with an explicit cookie header.
+async fn authorize_with(
+    kit: &TestHarness,
+    client: &str,
+    extra: &str,
+    cookies: &str,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let uri = format!(
+        "{BASE}/authorize?response_type=code&client_id={client}&redirect_uri={REDIRECT}\
+         &code_challenge={}&code_challenge_method=S256&state=xyz{extra}",
+        challenge()
+    );
+    let request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::COOKIE, cookies);
+    send(kit, request, axum::body::Body::empty()).await
+}
+
+/// Issue #913, third review, owner decision: an account with no email address
+/// (sign-up without email, #914) must step up on a passkey ceremony alone.
+/// Nothing about the step-up depends on an address existing.
+#[pollster::test]
+async fn an_account_with_no_email_steps_up_on_a_passkey_ceremony_alone() {
+    let (kit, clock) = kit();
+    insert_user(
+        &*kit.db,
+        &UserRow {
+            id: "nomail".to_owned(),
+            display_name: None,
+            primary_email: None,
+            primary_email_verified: false,
+            locale: None,
+            status: "active".to_owned(),
+            created_at: iso(EPOCH - 10_000),
+            updated_at: iso(EPOCH - 10_000),
+        },
+    )
+    .await
+    .expect("user");
+    let client = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "nomail", 600, &["passkey", "user"]).await;
+    let tx = demand(&kit, &client, &old).await;
+    clock_advance_ms(&clock, 1000);
+    let ceremony = session_now(&kit, &clock, "nomail", &["passkey", "user"]).await;
+    let (status, headers, _) = authorize(
+        &kit,
+        &client,
+        &format!("&prompt=login&step_up={tx}"),
+        Some(&ceremony),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FOUND, "{headers:?}");
+    assert!(
+        is_code(&headers),
+        "a passkey ceremony steps up an account with no email"
+    );
 }

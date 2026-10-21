@@ -45,7 +45,68 @@ fn config() -> Arc<MapConfig> {
             "AUTH_CORE_MAIL_FROM".to_owned(),
             "auth@example.test".to_owned(),
         ),
+        // The magic link is offered, so an address change has its email
+        // ceremony (issue #912, third review).
+        (
+            "AUTH_CORE_LOGIN_METHODS".to_owned(),
+            "password,magic-link".to_owned(),
+        ),
     ]))
+}
+
+/// The config of a deployment that offers no magic link: an account with a
+/// password re-proves an address change with it.
+fn config_without_magic_link() -> Arc<MapConfig> {
+    Arc::new(MapConfig::from_pairs([
+        (
+            "AUTH_CORE_PUBLIC_BASE".to_owned(),
+            "https://auth.example.test".to_owned(),
+        ),
+        (
+            "AUTH_CORE_MAIL_FROM".to_owned(),
+            "auth@example.test".to_owned(),
+        ),
+        ("AUTH_CORE_LOGIN_METHODS".to_owned(), "password".to_owned()),
+    ]))
+}
+
+/// Without a magic link, the password is the way an address change re-proves
+/// the caller (issue #912, third review): the right password moves the
+/// address, a wrong one does not, and a session with no password (a
+/// federated-only account) has no way to change its address at all.
+#[test]
+fn without_a_magic_link_the_password_re_proves_an_address_change() {
+    pollster::block_on(async {
+        let kit = TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
+            ports.config = config_without_magic_link();
+        });
+        account(&kit, "ada", OLD, true).await;
+        account(&kit, "bob", "bob@example.test", false).await;
+        let ada = sign_in(&kit, "ada", 2 * HOUR).await;
+        let bob = sign_in(&kit, "bob", 2 * HOUR).await;
+        let wrong = change(
+            &kit,
+            &ada,
+            json!({ "new_email": FRESH, "current_password": "not it" }),
+        )
+        .await;
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN);
+        let right = change(
+            &kit,
+            &ada,
+            json!({ "new_email": FRESH, "current_password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(right.status, StatusCode::ACCEPTED, "{}", right.text());
+
+        assert_eq!(
+            change(&kit, &bob, json!({ "new_email": "b@example.test" }))
+                .await
+                .status,
+            StatusCode::FORBIDDEN,
+            "no password, no magic link: no way to change the address"
+        );
+    });
 }
 
 fn kits() -> Vec<TestHarness> {

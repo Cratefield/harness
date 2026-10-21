@@ -629,6 +629,20 @@ async fn stepped_up_within_requires_a_recent_passkey_or_email() {
         .expect("verifies");
     assert!(email.stepped_up_within(120, NOW));
 
+    // The same recent email login during the quiet period: no `acr` was
+    // issued for it, so it is not a step-up (issue #912, third review).
+    let mut plain = claims(CLIENT, ISSUER, NOW + 600);
+    plain["auth_time"] = json!(NOW - 30);
+    plain["amr"] = json!(["email"]);
+    let plain_token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+        &plain,
+    );
+    let plain = auth.verify(&plain_token).await.expect("verifies");
+    assert!(!plain.stepped_up_within(120, NOW), "no acr, no step-up");
+    assert!(plain.authenticated_within(120, NOW));
+
     let federated = auth
         .verify(&mint_with(json!(["federated"]), NOW - 30))
         .await

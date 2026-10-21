@@ -198,10 +198,10 @@ pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
 #[derive(Debug, Default, Deserialize)]
 struct ChangeBody {
     new_email: String,
-    /// Retired: the change is guarded by a step-up ceremony, not a password.
-    /// Still accepted and ignored, so an existing client's body parses.
-    #[serde(default, rename = "current_password")]
-    _current_password: Option<String>,
+    /// The account's password, where the deployment offers no magic link and
+    /// the account has one (see [`change`]).
+    #[serde(default)]
+    current_password: Option<String>,
 }
 
 async fn change(
@@ -241,9 +241,22 @@ async fn change(
     // second review): the change needs a passkey or email ceremony in the last
     // two minutes, on an account whose passkeys and address have been quiet
     // for a day. A password re-entry is no longer an alternative.
-    crate::authorize::require_recent_ceremony(db, clock, &session.id, &user.id)
-        .await
-        .map_err(|problem| problem.instance(&scope.request_id))?;
+    //
+    // Where the deployment offers no magic link, an account with a password
+    // re-proves with the password instead: an address change must stay
+    // possible for an account whose only other sign-in is a passkey it cannot
+    // reach from here (issue #912, third review).
+    let password_path = !magic_link_offered(&*state.ctx.config)
+        && matches!(store::password_credential(db, &user.id).await, Ok(Some(_)));
+    if password_path {
+        prove_password(db, &state, &user.id, body.current_password.as_deref())
+            .await
+            .map_err(|problem| problem.instance(&scope.request_id))?;
+    } else {
+        crate::authorize::require_recent_ceremony(db, clock, &session.id, &user.id)
+            .await
+            .map_err(|problem| problem.instance(&scope.request_id))?;
+    }
 
     // Everything that could distinguish the outcomes happens here, on the
     // deferred task: whether the address is free, whether a token is issued,
@@ -677,6 +690,54 @@ fn send_mail(
     })
 }
 
+/// Whether this deployment offers the magic-link sign-in. Its email ceremony is
+/// how an account with a passkey changes its address (issue #912, third review).
+fn magic_link_offered(cfg: &dyn cratefield_core::Config) -> bool {
+    cratefield_core::ModuleConfig::new("auth-core", cfg)
+        .get_opt(crate::authorize::LOGIN_METHODS_KEY)
+        .is_some_and(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .any(|slug| slug == "magic-link")
+        })
+}
+
+/// Re-proves the caller with the account's password, for an address change in
+/// a deployment without a magic link.
+async fn prove_password(
+    db: &dyn Database,
+    state: &ModuleState,
+    user_id: &str,
+    current_password: Option<&str>,
+) -> Result<(), Problem> {
+    let credential = match store::password_credential(db, user_id).await {
+        Ok(Some(credential)) => credential,
+        Ok(None) => return Err(Problem::new(&REAUTHENTICATION_REQUIRED)),
+        Err(err) => {
+            tracing::error!(error = %err, "could not read the password credential");
+            return Err(Problem::internal());
+        }
+    };
+    let stored = credential
+        .password_hash
+        .as_ref()
+        .map_or_else(String::new, |h| h.0.clone());
+    // The legacy formats apply here for the reason they apply at login (issue
+    // #650): an imported bcrypt account must not be locked out of its settings.
+    let legacy = match crate::secrets::LegacyHashes::from_config(&*state.ctx.config) {
+        Ok(legacy) => legacy,
+        Err(err) => {
+            tracing::warn!(error = %err, "auth-core: legacy-hash configuration is invalid");
+            crate::secrets::LegacyHashes::default()
+        }
+    };
+    if crate::secrets::verify_password_with(current_password.unwrap_or_default(), &stored, legacy) {
+        Ok(())
+    } else {
+        Err(Problem::new(&REAUTHENTICATION_REQUIRED))
+    }
+}
+
 /// Tells the account's address that a passkey was added or removed (issue
 /// #912, second review). Every passkey change is announced, whichever session
 /// made it. A deployment that cannot mail, or an account with no address,
@@ -697,11 +758,19 @@ pub async fn notify_passkey_change(ctx: &ModuleContext, user_id: &str, what: &st
     let Ok(Some(user)) = store::user_by_id(db, user_id).await else {
         return;
     };
+    // An account with no address (sign-up without email, issue #914) has nobody
+    // to mail. The change still stands, and the log records that no notice went
+    // out. An in-app notice record is the follow-up for these accounts.
     let Some(address) = user
         .primary_email
         .clone()
         .filter(|address| !address.is_empty())
     else {
+        tracing::info!(
+            subject_hash = %cratefield_core::subject_hash(user_id),
+            change = what,
+            "an account with no address changed its passkeys; no notice was mailed"
+        );
         return;
     };
     let brand = crate::Brand::from_config(&*ctx.config, &ctx.venture);

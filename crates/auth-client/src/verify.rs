@@ -98,7 +98,13 @@ impl Claims {
     /// not pass it, however recent. `false` when the token has no `auth_time`.
     #[must_use]
     pub fn stepped_up_within(&self, max_age_secs: i64, now: i64) -> bool {
-        self.authenticated_within(max_age_secs, now)
+        // The context is the proof: the issuer sets `acr` only on the code
+        // that spent a step-up transaction, which required a passkey or email
+        // ceremony, begun after the demand, outside the account's 24-hour quiet
+        // period. A plain email or passkey login during that period carries no
+        // `acr`, and does not pass (issue #912, third review).
+        self.acr.as_deref() == Some(STEP_UP_ACR)
+            && self.authenticated_within(max_age_secs, now)
             && self
                 .amr
                 .iter()
@@ -133,6 +139,10 @@ impl Claims {
             && self.amr.iter().any(|method| method == "sso")
     }
 }
+
+/// The `acr` a token carries when its authorization code spent a step-up
+/// transaction (issue #912). Mirrors the issuer's value.
+const STEP_UP_ACR: &str = "urn:cratefield:stepup";
 
 /// The one `typ` an access token carries (RFC 9068). An ID token is signed
 /// by the same key and has the same `aud`, so without this check it would

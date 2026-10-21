@@ -90,6 +90,21 @@ are purged when the next demand is made.
 **Timing.** The ceremony must begin after the demand, to the millisecond, and
 be at most two minutes old when the request returns.
 
+**Third review, what changed.** The `acr` a spent step-up earns is carried by
+the authorization code that spent it, never by the session: a refresh, or
+another client's code, does not carry it. An anonymous demand is
+rate-limited per caller address and capped at 1000 open per client (past it
+the request gets `temporarily_unavailable`). A `login_hint` naming an account
+binds an anonymous demand to that account, so another account's ceremony
+cannot answer it; a relying party must still compare `sub` with the account
+it meant. An account's first passkey needs a sign-in of any method within two
+minutes, and is exempt from the quiet period; a later passkey needs a passkey
+or email ceremony. Removing a passkey starts no quiet period. Where the
+deployment offers no magic link, an address change re-proves with the
+password. An account with no address (sign-up without email, #914) steps up
+and enrols passkeys on a passkey ceremony alone; a notice that cannot be
+mailed is logged, and an in-app record is the follow-up in #914.
+
 **Account changes.** Adding or removing a passkey, and changing the address,
 need a passkey or email ceremony at most two minutes old
 (`require_recent_ceremony`). A password is no longer a way to change the

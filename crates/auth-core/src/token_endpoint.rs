@@ -198,6 +198,7 @@ async fn minted_response(
     client_id: &str,
     refresh: &str,
     id_token: IdToken<'_>,
+    acr: Option<&str>,
 ) -> Result<Response, Problem> {
     let email = user
         .primary_email
@@ -207,7 +208,6 @@ async fn minted_response(
     let auth_time = auth_time_of(session)?;
     let roles = roles_for(db, client_id, user).await?;
     // The authentication context a step-up earned, if this session earned one.
-    let acr = store::session_acr(db, &session.id).await?;
     // The session's SSO connection (issue #627), named in the token only
     // while it still belongs to the client the token is for and is still
     // active: a connection is a fact about one venture's organization, so
@@ -234,7 +234,7 @@ async fn minted_response(
         &amr,
         auth_time,
         roles.as_deref(),
-        acr.as_deref(),
+        acr,
     )
     .map_err(|err| {
         tracing::error!(error = %err, "access-token mint failed");
@@ -258,7 +258,7 @@ async fn minted_response(
             nonce,
             roles.as_deref(),
             &session.id,
-            acr.as_deref(),
+            acr,
         )
         .map_err(|err| {
             tracing::error!(error = %err, "id-token mint failed");
@@ -281,6 +281,7 @@ async fn mint_pair(
     user: &UserRow,
     client_id: &str,
     id_token: IdToken<'_>,
+    acr: Option<&str>,
 ) -> Result<Response, Problem> {
     let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id)
         .await
@@ -289,7 +290,7 @@ async fn mint_pair(
             Problem::internal()
         })?;
     minted_response(
-        db, clock, keys, session, user, client_id, &refresh, id_token,
+        db, clock, keys, session, user, client_id, &refresh, id_token, acr,
     )
     .await
 }
@@ -424,6 +425,8 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
         subject_hash = %subject_hash(&user.id),
         "authorization code exchanged"
     );
+    // The context a step-up earned belongs to this code alone.
+    let acr = payload.get("acr").and_then(Value::as_str);
     // The ID token is issued only when the request asked for `openid`, and
     // carries the nonce the request sent, if it sent one.
     let id_token = if payload.get("openid").and_then(Value::as_bool) == Some(true) {
@@ -442,6 +445,7 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
         &user,
         client_id,
         id_token,
+        acr,
     )
     .await
 }
@@ -483,6 +487,9 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
         client_id,
         &granted.refresh_token,
         IdToken::Omit,
+        // A refresh never carries the step-up context: that belonged to the
+        // code that spent the transaction (issue #912, third review).
+        None,
     )
     .await
 }

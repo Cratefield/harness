@@ -34,7 +34,7 @@ pub use brand::Brand;
 // could ask for it.
 pub use authorize::{
     LOGIN_METHODS_KEY, known_method_slugs, record_security_change, require_recent_ceremony,
-    sign_in_links,
+    require_recent_session, sign_in_links,
 };
 mod clients;
 /// Login CSRF (issue #439): the same-origin guard a state-changing route
@@ -319,6 +319,22 @@ const MIGRATION_STEP_UP_HARDENING: SqlMigration = SqlMigration::new(
     "0015",
     "step_up_hardening",
     include_str!("../migrations/sqlite/0015_step_up_hardening.sql"),
+);
+
+/// The Postgres form of the hardening migration: `created_ms` is BIGINT there.
+const MIGRATION_STEP_UP_HARDENING_POSTGRES: SqlMigration = SqlMigration::new(
+    "0015",
+    "step_up_hardening",
+    include_str!("../migrations/postgres/0015_step_up_hardening.sql"),
+);
+
+/// The third review's forward-only follow-up: the authentication context moves
+/// from the session to the authorization code, so the session column 0015
+/// added is dropped again.
+const MIGRATION_STEP_UP_ACR_IN_CODES: SqlMigration = SqlMigration::new(
+    "0016",
+    "step_up_acr_in_codes",
+    include_str!("../migrations/sqlite/0016_step_up_acr_in_codes.sql"),
 );
 
 /// Router state: the module context and the resolved rotation overlap.
@@ -657,7 +673,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 15] = [
+        const MIGRATIONS: [SqlMigration; 16] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -673,6 +689,7 @@ impl Module for AuthCore {
             MIGRATION_STEP_UP,
             MIGRATION_STEP_UP_TRANSACTIONS,
             MIGRATION_STEP_UP_HARDENING,
+            MIGRATION_STEP_UP_ACR_IN_CODES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -683,7 +700,7 @@ impl Module for AuthCore {
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 15] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 16] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -698,7 +715,8 @@ impl Module for AuthCore {
             MIGRATION_USER_ADMIN_AUDIT,
             MIGRATION_STEP_UP,
             MIGRATION_STEP_UP_TRANSACTIONS,
-            MIGRATION_STEP_UP_HARDENING,
+            MIGRATION_STEP_UP_HARDENING_POSTGRES,
+            MIGRATION_STEP_UP_ACR_IN_CODES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -958,7 +976,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 15);
+        assert_eq!(migrations.sqlite.len(), 16);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -989,10 +1007,12 @@ mod tests {
         assert_eq!(migrations.sqlite[13].name, "step_up_transactions");
         assert_eq!(migrations.sqlite[14].id, "0015");
         assert_eq!(migrations.sqlite[14].name, "step_up_hardening");
+        assert_eq!(migrations.sqlite[15].id, "0016");
+        assert_eq!(migrations.sqlite[15].name, "step_up_acr_in_codes");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 15);
+        assert_eq!(migrations.postgres.len(), 16);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -1046,9 +1066,13 @@ mod tests {
             migrations.postgres[13].sql, migrations.sqlite[13].sql,
             "the step-up tables are portable DDL, so Postgres reuses the sqlite file"
         );
+        // Postgres needs BIGINT for the millisecond column, so its form of this
+        // migration is its own file (issue #912, third review).
+        assert_ne!(migrations.postgres[14].sql, migrations.sqlite[14].sql);
+        assert!(migrations.postgres[14].sql.contains("BIGINT"));
         assert_eq!(
-            migrations.postgres[14].sql, migrations.sqlite[14].sql,
-            "the step-up hardening is portable DDL, so Postgres reuses the sqlite file"
+            migrations.postgres[15].sql, migrations.sqlite[15].sql,
+            "the acr move is portable DDL, so Postgres reuses the sqlite file"
         );
         assert_eq!(
             migrations.postgres[6].sql, migrations.sqlite[6].sql,

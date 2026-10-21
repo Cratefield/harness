@@ -2381,41 +2381,6 @@ pub(crate) async fn purge_step_ups(db: &dyn Database, now: &str) -> Result<u64, 
     db.execute(&Statement::render(&delete)).await
 }
 
-/// Records the authentication context a session earned by spending a
-/// step-up transaction.
-///
-/// # Errors
-///
-/// [`DbError::Execute`] when the statement fails.
-pub(crate) async fn set_session_acr(
-    db: &dyn Database,
-    id: &str,
-    acr: &str,
-) -> Result<u64, DbError> {
-    let mut update = Query::update();
-    update
-        .table(iden("sessions"))
-        .values([(iden("acr"), acr.into())])
-        .and_where(Expr::col(iden("id")).eq(id));
-    db.execute(&Statement::render(&update)).await
-}
-
-/// The authentication context a session earned, if it spent a step-up.
-///
-/// # Errors
-///
-/// [`DbError::Query`] when the statement fails.
-pub(crate) async fn session_acr(db: &dyn Database, id: &str) -> Result<Option<String>, DbError> {
-    let query = Query::select()
-        .column(iden("acr"))
-        .from(iden("sessions"))
-        .and_where(Expr::col(iden("id")).eq(id))
-        .limit(1)
-        .to_owned();
-    let rows = db.query(&Statement::render(&query)).await?;
-    Ok(rows.first().and_then(|row| optional::<String>(row, "acr")))
-}
-
 /// Records a session's creation time to the millisecond.
 ///
 /// # Errors
@@ -2490,4 +2455,28 @@ pub(crate) async fn set_security_changed_at(
         .values([(iden("security_changed_at"), now.into())])
         .and_where(Expr::col(iden("id")).eq(user_id));
     db.execute(&Statement::render(&update)).await
+}
+
+/// Open (unspent, unexpired) transactions made before anyone was signed in,
+/// for one client. Bounds the demands an anonymous caller can leave behind
+/// (issue #912, third review).
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn count_open_unbound_step_ups(
+    db: &dyn Database,
+    client_id: &str,
+    now: &str,
+) -> Result<usize, DbError> {
+    let query = Query::select()
+        .column(iden("id"))
+        .from(iden("step_up_transactions"))
+        .and_where(Expr::col(iden("user_id")).is_null())
+        .and_where(Expr::col(iden("client_id")).eq(client_id))
+        .and_where(Expr::col(iden("consumed_at")).is_null())
+        .and_where(Expr::col(iden("expires_at")).gt(now))
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.len())
 }

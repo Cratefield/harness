@@ -501,6 +501,32 @@ const STEP_UP_MAX_SESSION_AGE_MS: i64 = 120_000;
 /// that session pass a step-up (issue #912, second review).
 const SECURITY_QUIET_SECS: i64 = 24 * 60 * 60;
 
+/// The most open transactions made before anyone was signed in, for one
+/// client. Past it, the request is answered `temporarily_unavailable` rather
+/// than storing another demand (issue #912, third review).
+const MAX_OPEN_UNBOUND_PER_CLIENT: usize = 1000;
+
+/// The rate limit an anonymous caller's demands are held to, per caller
+/// address. `None` when the caller is within it, or when there is no limiter.
+async fn step_up_limit(
+    state: &ModuleState,
+    headers: &HeaderMap,
+) -> Option<cratefield_core::Decision> {
+    let limiter = state.ctx.ports.rate_limiter.as_deref()?;
+    let ip = cratefield_core::client_ip(headers);
+    for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
+        match limiter.limit(&format!("auth-core:step-up:{key}")).await {
+            Ok(decision) if !decision.ok => return Some(decision),
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(error = %err, "the auth-core rate limiter is unavailable");
+                return None;
+            }
+        }
+    }
+    None
+}
+
 /// The most open transactions one account may hold. The oldest are dropped
 /// when a new one would exceed it.
 const MAX_OPEN_STEP_UPS_PER_ACCOUNT: usize = 20;
@@ -531,6 +557,9 @@ const BROWSER_COOKIE: &str = "__Host-step-up";
 enum StepUp {
     /// Nothing more is asked of the session.
     Met,
+    /// The session's ceremony spent a transaction at `at` (RFC 3339): the
+    /// request is met, and the authorization code it earns carries `acr`.
+    SteppedUp { at: String },
     /// The session must authenticate again. `transaction` is the value the
     /// chooser carries through the login, when this request made a demand.
     Required { transaction: Option<String> },
@@ -597,9 +626,10 @@ async fn step_up_decision(
     }
     if within_max_age
         && let Some(presented) = ask.presented
-        && transaction_satisfied(db, clock, &session.id, &row, &ask, presented).await?
+        && let Some(at) =
+            transaction_satisfied(db, clock, &session.id, &row, &ask, presented).await?
     {
-        return Ok(StepUp::Met);
+        return Ok(StepUp::SteppedUp { at });
     }
     if !ask.record {
         return Ok(StepUp::Required { transaction: None });
@@ -638,13 +668,13 @@ async fn transaction_satisfied(
     session: &store::SessionRow,
     ask: &StepUpAsk<'_>,
     presented: &str,
-) -> Result<bool, Problem> {
+) -> Result<Option<String>, Problem> {
     let hash = sessions::sha256_hex(presented.as_bytes());
     let Some(transaction) = store::step_up_by_hash(db, &hash)
         .await
         .map_err(|_| Problem::internal())?
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let now = clock.now().replace_nanosecond(0).expect("in range");
     let now_text = iso(now);
@@ -652,15 +682,15 @@ async fn transaction_satisfied(
         || transaction.expires_at <= now_text
         || transaction.client_id != ask.client_id
     {
-        return Ok(false);
+        return Ok(None);
     }
     match &transaction.user_id {
-        Some(owner) if *owner != session.user_id => return Ok(false),
+        Some(owner) if *owner != session.user_id => return Ok(None),
         Some(_) => {}
         // An unbound demand is answered only by the browser that asked.
         None => {
             if transaction.browser_hash.is_none() || ask.browser_hash != transaction.browser_hash {
-                return Ok(false);
+                return Ok(None);
             }
         }
     }
@@ -675,29 +705,26 @@ async fn transaction_satisfied(
     let current = now_ms(clock);
     // The ceremony began after the demand, to the millisecond, and is recent.
     if created <= demanded || current < created || current - created > STEP_UP_MAX_SESSION_AGE_MS {
-        return Ok(false);
+        return Ok(None);
     }
     let methods = token_endpoint::amr_of(session);
     if !methods
         .iter()
         .any(|method| STEP_UP_METHODS.contains(&method.as_str()))
     {
-        return Ok(false);
+        return Ok(None);
     }
     if !account_quiet(db, clock, &session.user_id).await? {
-        return Ok(false);
+        return Ok(None);
     }
-    // Spent here. Of two requests racing on one transaction, one wins.
+    // Spent here. Of two requests racing on one transaction, one wins. The
+    // session itself is not marked: the authorization code this request earns
+    // carries the context (issue #912, third review).
     let spent = store::consume_step_up(db, &transaction.id, &session.user_id, &now_text)
         .await
         .map_err(|_| Problem::internal())?
         == 1;
-    if spent {
-        store::set_session_acr(db, session_id, STEP_UP_ACR)
-            .await
-            .map_err(|_| Problem::internal())?;
-    }
-    Ok(spent)
+    Ok(spent.then_some(now_text))
 }
 
 /// Whether the account's passkeys and address have been left alone for the
@@ -814,6 +841,41 @@ pub async fn require_recent_ceremony(
         return Err(refused());
     }
     if !account_quiet(db, clock, user_id).await? {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+/// Checks that the session was signed in at most two minutes ago, by any
+/// method. This is the gate on an account's first passkey (issue #912, third
+/// review): a password-only or federated-only account must be able to enrol
+/// one, and the fresh sign-in is what proves the person is present.
+///
+/// # Errors
+///
+/// [`Problem`] with `auth/reauthentication-required` when the session is older,
+/// or an internal problem when a read fails.
+pub async fn require_recent_session(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+) -> Result<(), Problem> {
+    let refused = || Problem::new(&crate::email::REAUTHENTICATION_REQUIRED);
+    let Some(row) = store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Err(refused());
+    };
+    let created = match store::session_created_ms(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(ms) => ms,
+        None => parse_time(&row.created_at)?.unix_timestamp() * 1_000,
+    };
+    let current = now_ms(clock);
+    if current < created || current - created > STEP_UP_MAX_SESSION_AGE_MS {
         return Err(refused());
     }
     Ok(())
@@ -1076,14 +1138,52 @@ async fn authorize(
             .await?
         }
         None if step_up_wanted => {
+            // Demands made by anonymous callers are the cheapest thing an
+            // outsider can make this service store, so each caller is
+            // rate-limited and each client's open ones are capped (issue #912,
+            // third review).
+            if let Some(decision) = step_up_limit(&state, &headers).await {
+                return Ok(cratefield_core::rate_limited(&decision).into_response());
+            }
+            let now_text = iso(clock.now().replace_nanosecond(0).expect("in range"));
+            let open = store::count_open_unbound_step_ups(&*db, &query.client_id, &now_text)
+                .await
+                .map_err(|_| Problem::internal())?;
+            if open >= MAX_OPEN_UNBOUND_PER_CLIENT {
+                return Ok(oauth_error_redirect(
+                    &query.redirect_uri,
+                    "temporarily_unavailable",
+                    query.state.as_deref(),
+                ));
+            }
+            // A login_hint that names an account binds the demand to that
+            // account now, so a ceremony by anyone else cannot answer it (login
+            // CSRF). A relying party must still compare `sub` (see README).
+            let bound_to = match query
+                .login_hint
+                .as_deref()
+                .map(cratefield_core::normalize_email)
+            {
+                Some(email) if cratefield_core::is_valid(&email) => {
+                    store::user_by_primary_email(&*db, &email)
+                        .await
+                        .map_err(|_| Problem::internal())?
+                        .filter(|user| user.status == store::STATUS_ACTIVE)
+                        .map(|user| user.id)
+                }
+                _ => None,
+            };
             let cookie = new_browser_cookie()?;
+            let browser_hash = bound_to
+                .is_none()
+                .then(|| sessions::sha256_hex(cookie.as_bytes()));
             let transaction = new_step_up(
                 &*db,
                 &*clock,
                 &*id_gen,
-                None,
+                bound_to.as_deref(),
                 &query.client_id,
-                Some(sessions::sha256_hex(cookie.as_bytes())),
+                browser_hash,
             )
             .await?;
             browser_cookie = Some(cookie);
@@ -1095,7 +1195,11 @@ async fn authorize(
     };
     let (step_up_required, step_up_transaction) = match &step_up {
         StepUp::Required { transaction } => (true, transaction.clone()),
-        StepUp::Met => (false, None),
+        StepUp::Met | StepUp::SteppedUp { .. } => (false, None),
+    };
+    let stepped_up_at = match &step_up {
+        StepUp::SteppedUp { at } => Some(at.clone()),
+        StepUp::Met | StepUp::Required { .. } => None,
     };
     if prompt.none && (session.is_none() || step_up_required) {
         return Ok(oauth_error_redirect(
@@ -1225,6 +1329,12 @@ async fn authorize(
                     // Whether the request asked for an ID token (OpenID
                     // Connect Core section 3.1.2.1).
                     "openid": openid,
+                    // The context a spent step-up transaction earned, and when
+                    // it was spent. Only this code carries them: a refresh or
+                    // another client's code never does (issue #912, third
+                    // review).
+                    "acr": stepped_up_at.as_ref().map(|_| STEP_UP_ACR),
+                    "stepped_up_at": stepped_up_at,
                 })
                 .to_string(),
             ),
