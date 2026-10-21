@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/Cratefield/harness/compare/cratefield-adapter-postgres-v0.3.3...cratefield-adapter-postgres-v0.3.4) - 2026-10-21
+
+### Other
+
+- patch rustls / rustls-webpki / webpki-roots advisories ([#908](https://github.com/Cratefield/harness/pull/908))
+
+### Fixed
+
+- Postgres TLS uses the OS trust store (`sqlx` `tls-rustls-ring-native-roots`) instead of the bundled webpki-roots 0.26 set, which has no patched release (RUSTSEC-2026-0381).
+
 ## [0.3.3](https://github.com/Cratefield/harness/compare/cratefield-adapter-postgres-v0.3.2...cratefield-adapter-postgres-v0.3.3) - 2026-10-19
 
 ### Other

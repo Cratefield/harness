@@ -178,3 +178,31 @@ fn production_is_production_and_names_its_own_app() {
         );
     }
 }
+
+/// Whether a wrangler table declares the `RATE_LIMITER` binding in its
+/// `ratelimits` array.
+fn declares_rate_limiter(env: &toml::Table) -> bool {
+    env.get("ratelimits")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|bindings| {
+            bindings.iter().any(|binding| {
+                binding.get("name").and_then(toml::Value::as_str) == Some("RATE_LIMITER")
+            })
+        })
+}
+
+/// Issue #912, final review: the rate limiter is a required port of auth-core
+/// (anonymous step-up demands are rate-limited), so every instance must declare
+/// one, at the top level (staging) and in `[env.production]`, or it does not
+/// boot.
+#[test]
+fn every_instance_declares_a_rate_limiter_in_both_environments() {
+    for (name, table) in instances() {
+        for (env_name, env) in environments(&table) {
+            assert!(
+                declares_rate_limiter(env),
+                "instances/{name} declares no RATE_LIMITER in {env_name}"
+            );
+        }
+    }
+}

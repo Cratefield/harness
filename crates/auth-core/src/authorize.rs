@@ -30,11 +30,11 @@
 use askama::Template;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Form, OriginalUri, Query, State};
-use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use cratefield_core::{Clock, Config, Database, ModuleConfig, Problem, Scope, subject_hash};
+use cratefield_core::{Clock, Config, Database, IdGen, ModuleConfig, Problem, Scope, subject_hash};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -49,6 +49,7 @@ use crate::secrets;
 use crate::sessions;
 use crate::sso;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE};
+use crate::token_endpoint;
 
 /// Authorization-code lifetime: 60 seconds, single-use.
 pub(crate) const CODE_LIFETIME_SECS: i64 = 60;
@@ -399,6 +400,703 @@ struct AuthorizeQuery {
     /// through, for a caller that knows the person's address but not the
     /// connection. A hint, never an instruction.
     login_hint: Option<String>,
+    /// OpenID Connect `prompt` (Core section 3.1.2.1): space-separated
+    /// values. `login` forces a fresh ceremony even with a live session
+    /// (issue #912); `none` forbids any interaction.
+    prompt: Option<String>,
+    /// OpenID Connect `max_age` (Core section 3.1.2.1), as sent: the
+    /// longest acceptable time since the last authentication, in seconds.
+    /// `0` means the person must authenticate now. Parsed by
+    /// [`parse_max_age`] so a malformed value is refused with an OAuth
+    /// error rather than a rejected query.
+    max_age: Option<String>,
+    /// OpenID Connect `nonce`: echoed into the ID token so the client can
+    /// tie the token to its own request (issue #912).
+    nonce: Option<String>,
+    /// OpenID Connect `scope`. An ID token is issued only when it includes
+    /// `openid`.
+    scope: Option<String>,
+    /// The step-up transaction a login returns with (issue #912). Written
+    /// into the chooser's return path by this module; a value that names no
+    /// live transaction of this account and client does nothing.
+    step_up: Option<String>,
+}
+
+/// The longest `nonce` accepted. Opaque to this service and echoed
+/// verbatim into the ID token, so the bound is a sanity limit.
+const MAX_NONCE_BYTES: usize = 512;
+
+/// The `prompt` values this service understands: `none`, `login`, and
+/// `consent` / `select_account`, which name interactions it does not
+/// have and so accepts without acting on.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Prompt {
+    none: bool,
+    login: bool,
+}
+
+/// Reads `prompt`. Any unknown value, or `none` alongside another value
+/// (OpenID Connect Core section 3.1.2.1 forbids that), is an error.
+fn parse_prompt(raw: Option<&str>) -> Result<Prompt, ()> {
+    let mut prompt = Prompt::default();
+    let Some(raw) = raw else {
+        return Ok(prompt);
+    };
+    let values: Vec<&str> = raw.split_ascii_whitespace().collect();
+    for value in &values {
+        match *value {
+            "none" => prompt.none = true,
+            "login" => prompt.login = true,
+            "consent" | "select_account" => {}
+            _ => return Err(()),
+        }
+    }
+    if prompt.none && values.len() > 1 {
+        return Err(());
+    }
+    Ok(prompt)
+}
+
+/// Reads `max_age`: decimal digits only, so `-1`, `+5` and `1.5` are all
+/// refused. An absent value is no requirement.
+fn parse_max_age(raw: Option<&str>) -> Result<Option<i64>, ()> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if raw.is_empty() || raw.len() > 10 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(());
+    }
+    raw.parse::<i64>().map(Some).map_err(|_| ())
+}
+
+/// `path_and_query` with the named query parameters removed. The login
+/// chooser hands the pending request back to itself; a demand the login
+/// it is about to complete has already met must not travel with it.
+fn without_query_params(path_and_query: &str, names: &[&str]) -> String {
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return path_and_query.to_owned();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !names.contains(&pair.split('=').next().unwrap_or_default()))
+        .collect();
+    if kept.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    }
+}
+
+/// How long a step-up transaction stays good, from the moment the demand
+/// was made (issue #912).
+const STEP_UP_TTL_SECS: i64 = 600;
+
+/// The most a ceremony's session may be old, in milliseconds, and still be
+/// the ceremony a transaction asked for.
+const STEP_UP_MAX_SESSION_AGE_MS: i64 = 120_000;
+
+/// How long after a passkey or address change the account's passkey and email
+/// ceremonies stop counting as a step-up. A credential enrolled or an address
+/// changed by a session the attacker holds must not be the thing that lets
+/// that session pass a step-up (issue #912, second review).
+const SECURITY_QUIET_SECS: i64 = 24 * 60 * 60;
+
+/// The most open demands made before anyone was signed in, for one client. Past
+/// it the oldest is evicted, so an anonymous caller can never lock another out
+/// (issue #912, fifth review).
+const MAX_OPEN_UNBOUND_PER_CLIENT: usize = 1000;
+
+/// The most open anonymous demands naming one account (`login_hint`). Counted
+/// apart from the account's signed-in demands, and past it the new one is
+/// refused, never an older one evicted (fifth review).
+const MAX_OPEN_ANONYMOUS_HINT_PER_ACCOUNT: usize = 5;
+
+/// The rate limit an anonymous caller's demands are held to, per caller
+/// address. `None` when the caller is within it, or when there is no limiter.
+///
+/// `Err` when the limiter itself fails: an anonymous demand is then refused
+/// (fail closed), because nothing bounds it while the limiter is down (issue
+/// #912, final review).
+async fn step_up_limit(
+    state: &ModuleState,
+    headers: &HeaderMap,
+) -> Result<Option<cratefield_core::Decision>, ()> {
+    let Some(limiter) = state.ctx.ports.rate_limiter.as_deref() else {
+        return Err(());
+    };
+    let ip = cratefield_core::client_ip(headers);
+    for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
+        match limiter.limit(&format!("auth-core:step-up:{key}")).await {
+            Ok(decision) if !decision.ok => return Ok(Some(decision)),
+            Ok(_) => {}
+            Err(err) => {
+                tracing::error!(error = %err, "the auth-core rate limiter failed; refusing an anonymous demand");
+                return Err(());
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The most open transactions one account may hold. The oldest are dropped
+/// when a new one would exceed it.
+const MAX_OPEN_STEP_UPS_PER_ACCOUNT: usize = 20;
+
+/// The authentication methods a step-up ceremony may complete with. A passkey
+/// is verified here and an email link proves the mailbox here. A federated or
+/// SSO sign-in is not: the upstream's authentication is not checked by this
+/// service. `pwd` is left out too: a password is what the person already
+/// holds, not a fresh act of the same kind.
+const STEP_UP_METHODS: [&str; 2] = ["passkey", "email"];
+
+/// The authentication context a session carries once it has spent a step-up
+/// transaction (`acr`, issue #912).
+pub(crate) const STEP_UP_ACR: &str = "urn:cratefield:stepup";
+
+/// The query parameter that carries a step-up transaction through the login
+/// and back to `/authorize`. Written by this module into the chooser's return
+/// path only.
+const STEP_UP_PARAM: &str = "step_up";
+
+/// The cookie that binds a demand made before anyone is signed in to the
+/// browser that made it. Set by the chooser, `HttpOnly`, and read back on the
+/// return from the login.
+const BROWSER_COOKIE: &str = "__Host-step-up";
+
+/// The outcome of checking a request's step-up demand against the browser's
+/// session.
+enum StepUp {
+    /// Nothing more is asked of the session.
+    Met,
+    /// The session's ceremony spent a transaction at `at` (RFC 3339): the
+    /// request is met, and the authorization code it earns carries `acr`.
+    SteppedUp { at: String },
+    /// The session must authenticate again. `transaction` is the value the
+    /// chooser carries through the login, when this request made a demand.
+    Required { transaction: Option<String> },
+}
+
+/// What a request asks of the live session.
+struct StepUpAsk<'a> {
+    prompt: Prompt,
+    max_age: Option<i64>,
+    /// The transaction value the request came back with, if any.
+    presented: Option<&'a str>,
+    client_id: &'a str,
+    /// Whether a demand may be recorded. A `prompt=none` request is answered
+    /// with `login_required` and writes nothing.
+    record: bool,
+    /// The hash of this browser's step-up cookie, if it sent one.
+    browser_hash: Option<String>,
+}
+
+/// The current instant in milliseconds since the epoch.
+fn now_ms(clock: &dyn Clock) -> i64 {
+    i64::try_from(clock.now().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
+}
+
+/// Whether the live session satisfies the request's step-up demand (issue
+/// #912, OpenID Connect Core section 3.1.2.1).
+///
+/// - `max_age=N` with N > 0 is a plain age check against the session's
+///   creation, the moment of its last real authentication. It records nothing
+///   and it does not imply a method: a federated sign-in ends a `max_age`
+///   window like any other. A step-up caller uses `prompt=login`.
+/// - `prompt=login` and `max_age=0` demand a ceremony that happens after this
+///   request. The demand is a server-side transaction, and only a passkey or
+///   email ceremony satisfies it, in the way [`transaction_satisfied`] checks.
+async fn step_up_decision(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    session: &sessions::ValidSession,
+    ask: StepUpAsk<'_>,
+) -> Result<StepUp, Problem> {
+    let must_ceremony = ask.prompt.login || ask.max_age == Some(0);
+    if !must_ceremony && ask.max_age.is_none() {
+        return Ok(StepUp::Met);
+    }
+    // Fail closed: a session that cannot be read needs the ceremony.
+    let Some(row) = store::session_by_id(db, &session.id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Ok(StepUp::Required { transaction: None });
+    };
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let within_max_age = match ask.max_age {
+        Some(limit) if limit > 0 => (now - parse_time(&row.created_at)?).whole_seconds() <= limit,
+        _ => true,
+    };
+    if !must_ceremony {
+        return Ok(if within_max_age {
+            StepUp::Met
+        } else {
+            StepUp::Required { transaction: None }
+        });
+    }
+    if within_max_age
+        && let Some(presented) = ask.presented
+        && let Some(at) =
+            transaction_satisfied(db, clock, &session.id, &row, &ask, presented).await?
+    {
+        return Ok(StepUp::SteppedUp { at });
+    }
+    if !ask.record {
+        return Ok(StepUp::Required { transaction: None });
+    }
+    let transaction = new_step_up(
+        db,
+        clock,
+        id_gen,
+        Some(&session.user_id),
+        ask.client_id,
+        None,
+    )
+    .await?;
+    Ok(StepUp::Required {
+        transaction: Some(transaction),
+    })
+}
+
+/// Whether `presented` names an unspent transaction that this session's
+/// ceremony completes, and spends it when it does.
+///
+/// A transaction made by a signed-in session belongs to that account. One
+/// made before anyone was signed in belongs to the browser that asked, and
+/// goes to the account whose ceremony answers it. Either way the ceremony must
+/// be a passkey or an email one, begun after the demand (to the millisecond)
+/// and at most two minutes old, and the account must not have changed its
+/// passkeys or address in the last 24 hours.
+///
+/// One ceremony satisfies every transaction its account holds, one at a time:
+/// each request spends the transaction it presents, and the rest stay open
+/// until they expire or are used.
+async fn transaction_satisfied(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+    session: &store::SessionRow,
+    ask: &StepUpAsk<'_>,
+    presented: &str,
+) -> Result<Option<String>, Problem> {
+    let hash = sessions::sha256_hex(presented.as_bytes());
+    let Some(transaction) = store::step_up_by_hash(db, &hash)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Ok(None);
+    };
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let now_text = iso(now);
+    if transaction.consumed_at.is_some()
+        || transaction.expires_at <= now_text
+        || transaction.client_id != ask.client_id
+    {
+        return Ok(None);
+    }
+    match &transaction.user_id {
+        Some(owner) if *owner != session.user_id => return Ok(None),
+        Some(_) => {}
+        // An unbound demand is answered only by the browser that asked.
+        None => {
+            if transaction.browser_hash.is_none() || ask.browser_hash != transaction.browser_hash {
+                return Ok(None);
+            }
+        }
+    }
+    let demanded = transaction.created_ms;
+    let created = match store::session_created_ms(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(ms) => ms,
+        None => parse_time(&session.created_at)?.unix_timestamp() * 1_000,
+    };
+    let current = now_ms(clock);
+    // The ceremony began after the demand, to the millisecond, and is recent.
+    if created <= demanded || current < created || current - created > STEP_UP_MAX_SESSION_AGE_MS {
+        return Ok(None);
+    }
+    let methods = token_endpoint::amr_of(session);
+    if !methods
+        .iter()
+        .any(|method| STEP_UP_METHODS.contains(&method.as_str()))
+    {
+        return Ok(None);
+    }
+    if !account_quiet(db, clock, &session.user_id).await? {
+        return Ok(None);
+    }
+    // Spent here. Of two requests racing on one transaction, one wins. The
+    // session itself is not marked: the authorization code this request earns
+    // carries the context (issue #912, third review).
+    let spent = store::consume_step_up(db, &transaction.id, &session.user_id, &now_text)
+        .await
+        .map_err(|_| Problem::internal())?
+        == 1;
+    Ok(spent.then_some(now_text))
+}
+
+/// Whether the account's passkeys and address have been left alone for the
+/// last 24 hours. An account that has never changed them is quiet.
+async fn account_quiet(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    user_id: &str,
+) -> Result<bool, Problem> {
+    match store::security_changed_at(db, user_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        None => Ok(true),
+        Some(raw) => {
+            let changed = parse_time(&raw)?;
+            Ok((clock.now() - changed).whole_seconds() >= SECURITY_QUIET_SECS)
+        }
+    }
+}
+
+/// Records an anonymous demand that names an account (`login_hint`) and
+/// returns the value to carry through the login (fifth review). It is counted
+/// apart from the account's signed-in demands, and it never evicts one. A
+/// browser's earlier anonymous demand for the same account is replaced, not
+/// accumulated. `None` when the account already holds its cap of these, which
+/// the caller answers with a refusal.
+async fn new_anonymous_hint(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    user_id: &str,
+    client_id: &str,
+    request_browser: Option<&str>,
+    issued_browser: &str,
+) -> Result<Option<String>, Problem> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        tracing::error!(error = %err, "step-up entropy source failed");
+        Problem::internal()
+    })?;
+    let value = Base64UrlUnpadded::encode_string(&bytes);
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let now_text = iso(now);
+    store::purge_step_ups(db, &now_text)
+        .await
+        .map_err(|_| Problem::internal())?;
+    let mut open = store::open_anonymous_hint_step_ups(db, user_id, &now_text)
+        .await
+        .map_err(|_| Problem::internal())?;
+    // The same browser asking again replaces its own earlier demand.
+    if let Some(browser) = request_browser {
+        for (id, _) in open.iter().filter(|(_, hash)| hash == browser) {
+            store::delete_step_up(db, id)
+                .await
+                .map_err(|_| Problem::internal())?;
+        }
+        open.retain(|(_, hash)| hash != browser);
+    }
+    if open.len() >= MAX_OPEN_ANONYMOUS_HINT_PER_ACCOUNT {
+        return Ok(None);
+    }
+    store::insert_step_up(
+        db,
+        &store::StepUpRow {
+            id: id_gen.ulid(),
+            user_id: Some(user_id.to_owned()),
+            client_id: client_id.to_owned(),
+            token_hash: sessions::sha256_hex(value.as_bytes()),
+            browser_hash: Some(issued_browser.to_owned()),
+            created_at: now_text,
+            created_ms: now_ms(clock),
+            expires_at: iso(now.saturating_add(time::Duration::seconds(STEP_UP_TTL_SECS))),
+            consumed_at: None,
+        },
+    )
+    .await
+    .map_err(|_| Problem::internal())?;
+    Ok(Some(value))
+}
+
+/// Records a new step-up transaction and returns the value to carry through
+/// the login. Only its hash is stored. Spent and expired transactions are
+/// purged first, and an account holding too many open ones drops its oldest.
+async fn new_step_up(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    user_id: Option<&str>,
+    client_id: &str,
+    browser_hash: Option<String>,
+) -> Result<String, Problem> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        tracing::error!(error = %err, "step-up entropy source failed");
+        Problem::internal()
+    })?;
+    let value = Base64UrlUnpadded::encode_string(&bytes);
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let now_text = iso(now);
+    store::purge_step_ups(db, &now_text)
+        .await
+        .map_err(|_| Problem::internal())?;
+    // Signed-in demands: past the account's cap the oldest is dropped.
+    // Anonymous ones: past the client's cap the oldest is evicted, so no caller
+    // can stop another from asking (issue #912, fifth review).
+    let (open, cap) = match user_id {
+        Some(owner) => (
+            store::open_step_ups_for_user(db, owner, &now_text)
+                .await
+                .map_err(|_| Problem::internal())?,
+            MAX_OPEN_STEP_UPS_PER_ACCOUNT,
+        ),
+        None => (
+            store::open_unbound_step_ups(db, client_id, &now_text)
+                .await
+                .map_err(|_| Problem::internal())?,
+            MAX_OPEN_UNBOUND_PER_CLIENT,
+        ),
+    };
+    let excess = (open.len() + 1).saturating_sub(cap);
+    for id in open.iter().take(excess) {
+        store::delete_step_up(db, id)
+            .await
+            .map_err(|_| Problem::internal())?;
+    }
+    store::insert_step_up(
+        db,
+        &store::StepUpRow {
+            id: id_gen.ulid(),
+            user_id: user_id.map(str::to_owned),
+            client_id: client_id.to_owned(),
+            token_hash: sessions::sha256_hex(value.as_bytes()),
+            browser_hash,
+            created_at: now_text,
+            created_ms: now_ms(clock),
+            expires_at: iso(now.saturating_add(time::Duration::seconds(STEP_UP_TTL_SECS))),
+            consumed_at: None,
+        },
+    )
+    .await
+    .map_err(|_| Problem::internal())?;
+    Ok(value)
+}
+
+/// Checks that the session may make an account change that a stolen session
+/// must not be able to make (issue #912, second review): adding or removing a
+/// passkey, and changing the address. The session must have been created by a
+/// passkey or email ceremony at most two minutes ago, and the account must
+/// have been quiet for 24 hours. A refusal is the reauthentication problem,
+/// the same one an address change always answered.
+///
+/// # Errors
+///
+/// [`Problem`] with `auth/reauthentication-required` when the session does not
+/// qualify, or an internal problem when a read fails.
+pub async fn require_recent_ceremony(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+    user_id: &str,
+) -> Result<(), Problem> {
+    let refused = || Problem::new(&crate::email::REAUTHENTICATION_REQUIRED);
+    let Some(row) = store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Err(refused());
+    };
+    let created = match store::session_created_ms(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(ms) => ms,
+        None => parse_time(&row.created_at)?.unix_timestamp() * 1_000,
+    };
+    let current = now_ms(clock);
+    if current < created || current - created > STEP_UP_MAX_SESSION_AGE_MS {
+        return Err(refused());
+    }
+    let methods = token_endpoint::amr_of(&row);
+    if !methods
+        .iter()
+        .any(|method| STEP_UP_METHODS.contains(&method.as_str()))
+    {
+        return Err(refused());
+    }
+    if !account_quiet(db, clock, user_id).await? {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+/// Checks that the session was signed in at most two minutes ago, by any
+/// method. This is the gate on an account's first passkey (issue #912, third
+/// review): a password-only or federated-only account must be able to enrol
+/// one, and the fresh sign-in is what proves the person is present.
+///
+/// # Errors
+///
+/// [`Problem`] with `auth/reauthentication-required` when the session is older,
+/// or an internal problem when a read fails.
+pub async fn require_recent_session(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+) -> Result<(), Problem> {
+    let refused = || Problem::new(&crate::email::REAUTHENTICATION_REQUIRED);
+    let Some(row) = store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Err(refused());
+    };
+    let created = match store::session_created_ms(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(ms) => ms,
+        None => parse_time(&row.created_at)?.unix_timestamp() * 1_000,
+    };
+    let current = now_ms(clock);
+    if current < created || current - created > STEP_UP_MAX_SESSION_AGE_MS {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+/// Whether the session was signed in by a passkey or an email ceremony, the two
+/// methods that can satisfy a step-up. A session that cannot be read is not one
+/// (fifth review): the caller then treats the enrolment as weak.
+pub async fn session_proves_by_passkey_or_email(db: &dyn Database, session_id: &str) -> bool {
+    match store::session_by_id(db, session_id).await {
+        Ok(Some(row)) => token_endpoint::amr_of(&row)
+            .iter()
+            .any(|method| STEP_UP_METHODS.contains(&method.as_str())),
+        _ => false,
+    }
+}
+
+/// The gate on enrolling a passkey on an account that already has one (issue
+/// #914). A recovery sign-in may enrol one, fresh, without the quiet check:
+/// that is what the recovery code is for, and the enrolment itself starts the
+/// quiet period. Anything else needs `require_recent_ceremony`.
+///
+/// # Errors
+///
+/// [`Problem`] as [`require_recent_ceremony`] answers.
+pub async fn require_enrolment_ceremony(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+    user_id: &str,
+) -> Result<(), Problem> {
+    let recovered = match store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(row) => token_endpoint::amr_of(&row).iter().any(|m| m == "recovery"),
+        None => false,
+    };
+    if recovered {
+        return require_recent_session(db, clock, session_id).await;
+    }
+    require_recent_ceremony(db, clock, session_id, user_id).await
+}
+
+/// Whether the session was signed in by a recovery code and nothing else. Such
+/// a session is for enrolling a passkey only (issue #914).
+async fn recovery_only(db: &dyn Database, session_id: &str) -> Result<bool, Problem> {
+    let Some(row) = store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Ok(false);
+    };
+    let methods = token_endpoint::amr_of(&row);
+    Ok(!methods.is_empty() && methods.iter().all(|method| method == "recovery"))
+}
+
+/// Records that the account's passkeys or address just changed, so that the
+/// next 24 hours' ceremonies do not count as a step-up.
+///
+/// # Errors
+///
+/// [`cratefield_core::DbError`] when the write fails.
+///
+/// # Panics
+///
+/// Never in practice: the documented panic is the `time` crate's nanosecond
+/// truncation, infallible on this path.
+pub async fn record_security_change(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    user_id: &str,
+) -> Result<(), cratefield_core::DbError> {
+    store::set_security_changed_at(
+        db,
+        user_id,
+        &iso(clock.now().replace_nanosecond(0).expect("in range")),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// An RFC 3339 timestamp read back from the store.
+fn parse_time(raw: &str) -> Result<OffsetDateTime, Problem> {
+    OffsetDateTime::parse(raw, &Rfc3339).map_err(|_| Problem::internal())
+}
+
+/// The value of this browser's step-up cookie, if it sent one.
+fn browser_cookie_of(headers: &HeaderMap) -> Option<String> {
+    for header in headers.get_all(header::COOKIE) {
+        let Ok(raw) = header.to_str() else {
+            continue;
+        };
+        for pair in raw.split(';') {
+            if let Some(value) = pair.trim().strip_prefix(BROWSER_COOKIE)
+                && let Some(value) = value.strip_prefix('=')
+            {
+                return Some(value.trim().to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// The `Set-Cookie` that gives a browser its step-up binding for ten minutes.
+fn browser_cookie_header(value: &str) -> String {
+    format!(
+        "{BROWSER_COOKIE}={value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={STEP_UP_TTL_SECS}"
+    )
+}
+
+/// A fresh value for the browser binding, of the same shape as a token.
+fn new_browser_cookie() -> Result<String, Problem> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        tracing::error!(error = %err, "step-up entropy source failed");
+        Problem::internal()
+    })?;
+    Ok(Base64UrlUnpadded::encode_string(&bytes))
+}
+
+/// The path the login chooser hands back to: this request as it came, without
+/// any step-up value the client sent, and with the transaction value this
+/// request made when there is one. `prompt` and `max_age` stay, because the login
+/// they ask for is the one the transaction is answered by.
+fn return_path(uri: &Uri, transaction: Option<&str>) -> String {
+    let path_and_query = uri.path_and_query().map_or_else(
+        || DEFAULT_CHOOSER_RETURN_TO.to_owned(),
+        |path_and_query| path_and_query.as_str().to_owned(),
+    );
+    let stripped = without_query_params(&path_and_query, &[STEP_UP_PARAM]);
+    match transaction {
+        None => stripped,
+        Some(value) => {
+            let separator = if stripped.contains('?') { '&' } else { '?' };
+            format!("{stripped}{separator}{STEP_UP_PARAM}={value}")
+        }
+    }
 }
 
 /// Validates the client and the exact redirect URI. `Err` renders the
@@ -489,17 +1187,57 @@ async fn authorize(
             None,
         ));
     }
+    // Step-up parameters (issue #912): a malformed one is an OAuth error
+    // from the registered URI, the same as any other bad parameter.
+    let (Ok(prompt), Ok(max_age)) = (
+        parse_prompt(query.prompt.as_deref()),
+        parse_max_age(query.max_age.as_deref()),
+    ) else {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "invalid_request",
+            query.state.as_deref(),
+        ));
+    };
+    if query
+        .nonce
+        .as_deref()
+        .is_some_and(|nonce| nonce.len() > MAX_NONCE_BYTES)
+    {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "invalid_request",
+            query.state.as_deref(),
+        ));
+    }
 
-    // A session is required to mint a code; without one, the login
-    // chooser. Its buttons carry this very request as `return_to`, so a
-    // person lands back on the pending `/authorize` rather than on the
-    // service's root with their request lost.
-    //
+    // The session, read once: the SSO routing below and the code minting
+    // further down both decide on it.
+    let session = match sessions::cookie_value(&headers) {
+        Some(cookie) => sessions::validate(&*db, &*clock, &cookie)
+            .await
+            .map_err(|_| Problem::internal())?,
+        None => None,
+    };
+    // A recovery sign-in is not a session a relying party can use: it can enrol
+    // a passkey and nothing else, so for this request the person is signed out
+    // (issue #914, security review).
+    let session = match session {
+        Some(live) => {
+            if recovery_only(&*db, &live.id).await? {
+                None
+            } else {
+                Some(live)
+            }
+        }
+        None => None,
+    };
+
     // `OriginalUri` and not `Uri`: the module is nested under
     // `/v1/auth-core`, and a nested handler sees the URI with the prefix
     // already stripped, so `Uri` alone would send people to `/authorize`,
     // which does not exist.
-    //
+
     // Path and query, never `to_string()`: on Workers the runtime builds
     // the request from `req.url()`, so the URI is **absolute**:
     // `https://auth.example/v1/auth-core/authorize?...`. Every provider's
@@ -510,22 +1248,164 @@ async fn authorize(
     // the native runtime the same URI arrives in origin form, so the bug
     // only appears in production, which is why the tests were green. See
     // the test that sends an absolute-form target.
-    let return_to = || {
-        original_uri.path_and_query().map_or_else(
-            || DEFAULT_CHOOSER_RETURN_TO.to_owned(),
-            |path_and_query| path_and_query.as_str().to_owned(),
-        )
-    };
+    //
+    // Without a session the chooser's login is itself the fresh
+    // ceremony, so `prompt` and `max_age` are dropped on the way back:
+    // the request they would demand has been met by the login that is
+    // about to happen, and carrying them would ask for a second one.
+    // A session is required to mint a code; without one, the login
+    // chooser. Its buttons carry this very request as `return_to`, so a
+    // person lands back on the pending `/authorize` rather than on the
+    // service's root with their request lost.
+    let return_to = |transaction: Option<&str>| return_path(&original_uri, transaction);
+    let browser_hash =
+        browser_cookie_of(&headers).map(|cookie| sessions::sha256_hex(cookie.as_bytes()));
+    let step_up_wanted = !prompt.none && (prompt.login || max_age == Some(0));
 
-    // The session, read once: the SSO routing below and the code minting
-    // further down both decide on it.
-    let session = match sessions::cookie_value(&headers) {
-        Some(cookie) => sessions::validate(&*db, &*clock, &cookie)
-            .await
-            .map_err(|_| Problem::internal())?,
-        None => None,
+    // Step-up (issue #912) decides before any routing or minting. A demand
+    // made before anyone is signed in is bound to this browser by a cookie the
+    // chooser sets, and to the account whose ceremony answers it. With
+    // `prompt=none` the answer is a refusal, and nothing is recorded.
+    let mut browser_cookie: Option<String> = None;
+    let step_up = match &session {
+        Some(live) => {
+            step_up_decision(
+                &*db,
+                &*clock,
+                &*id_gen,
+                live,
+                StepUpAsk {
+                    prompt,
+                    max_age,
+                    presented: query.step_up.as_deref(),
+                    client_id: &query.client_id,
+                    record: !prompt.none,
+                    browser_hash,
+                },
+            )
+            .await?
+        }
+        None if step_up_wanted => {
+            // Demands made by anonymous callers are the cheapest thing an
+            // outsider can make this service store, so each caller is
+            // rate-limited and each client's open ones are capped (issue #912,
+            // third review).
+            match step_up_limit(&state, &headers).await {
+                Ok(None) => {}
+                Ok(Some(decision)) => {
+                    return Ok(cratefield_core::rate_limited(&decision).into_response());
+                }
+                Err(()) => {
+                    return Ok(oauth_error_redirect(
+                        &query.redirect_uri,
+                        "temporarily_unavailable",
+                        query.state.as_deref(),
+                    ));
+                }
+            }
+            // A login_hint that names an account binds the demand to that
+            // account now, so a ceremony by anyone else cannot answer it (login
+            // CSRF). A relying party must still compare `sub` (see README).
+            let bound_to = match query
+                .login_hint
+                .as_deref()
+                .map(cratefield_core::normalize_email)
+            {
+                Some(email) if cratefield_core::is_valid(&email) => {
+                    store::user_by_primary_email(&*db, &email)
+                        .await
+                        .map_err(|_| Problem::internal())?
+                        .filter(|user| user.status == store::STATUS_ACTIVE)
+                        .map(|user| user.id)
+                }
+                _ => None,
+            };
+            let cookie = new_browser_cookie()?;
+            let issued = sessions::sha256_hex(cookie.as_bytes());
+            let transaction = match bound_to {
+                Some(user) => {
+                    match new_anonymous_hint(
+                        &*db,
+                        &*clock,
+                        &*id_gen,
+                        &user,
+                        &query.client_id,
+                        browser_hash.as_deref(),
+                        &issued,
+                    )
+                    .await?
+                    {
+                        Some(value) => value,
+                        // The account already holds its anonymous demands. Rather
+                        // than refuse, this request gets the same ordinary
+                        // browser-bound demand an unknown address gets, so the
+                        // response does not reveal whether the account exists
+                        // (issue #912, final review). No signed-in demand is
+                        // touched either way.
+                        None => {
+                            new_step_up(
+                                &*db,
+                                &*clock,
+                                &*id_gen,
+                                None,
+                                &query.client_id,
+                                Some(issued.clone()),
+                            )
+                            .await?
+                        }
+                    }
+                }
+                None => {
+                    new_step_up(
+                        &*db,
+                        &*clock,
+                        &*id_gen,
+                        None,
+                        &query.client_id,
+                        Some(issued),
+                    )
+                    .await?
+                }
+            };
+            browser_cookie = Some(cookie);
+            StepUp::Required {
+                transaction: Some(transaction),
+            }
+        }
+        None => StepUp::Met,
     };
+    let (step_up_required, step_up_transaction) = match &step_up {
+        StepUp::Required { transaction } => (true, transaction.clone()),
+        StepUp::Met | StepUp::SteppedUp { .. } => (false, None),
+    };
+    let stepped_up_at = match &step_up {
+        StepUp::SteppedUp { at } => Some(at.clone()),
+        StepUp::Met | StepUp::Required { .. } => None,
+    };
+    if prompt.none && (session.is_none() || step_up_required) {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "login_required",
+            query.state.as_deref(),
+        ));
+    }
 
+    let chooser = |transaction: Option<&str>, cookie: Option<&str>| {
+        let return_to = return_to(transaction);
+        let methods = enabled_login_methods(&*state.ctx.config, &return_to);
+        let mut response = html(&LoginChooserTemplate {
+            brand: brand_of(&state),
+            has_passkey: methods.iter().any(|method| method.is_passkey),
+            methods,
+            return_to,
+        });
+        if let Some(cookie) = cookie
+            && let Ok(value) = HeaderValue::from_str(&browser_cookie_header(cookie))
+        {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+        response
+    };
     // A connection named outright (issue #627). Only this client's own
     // active connections are routable: another client's id, an id that
     // does not exist and a disabled one are refused *identically*, with
@@ -548,12 +1428,25 @@ async fn authorize(
         // proceeds to a code like any other session's. Anything else —
         // no session, or a session from another way in, or from another
         // connection — has to go and become one first.
-        let on_this_connection =
-            session.as_ref().and_then(|s| s.sso_connection.as_deref()) == Some(connection_id);
+        //
+        // A step-up demand (issue #912) is never met by the connection the
+        // session already came through: it goes back to the IdP.
+        let on_this_connection = !step_up_required
+            && session.as_ref().and_then(|s| s.sso_connection.as_deref()) == Some(connection_id);
         if !on_this_connection {
-            return Ok(sso_start_redirect(connection_id, &return_to()));
+            // A federated sign-in cannot meet a step-up demand (issue #912):
+            // the person is offered the chooser, where a passkey or an
+            // email link can.
+            if step_up_required {
+                return Ok(chooser(
+                    step_up_transaction.as_deref(),
+                    browser_cookie.as_deref(),
+                ));
+            }
+            return Ok(sso_start_redirect(connection_id, &return_to(None)));
         }
     } else if session.is_none()
+        && !step_up_required
         && let Some(domain) = query.login_hint.as_deref().and_then(sso::domain_of_email)
     {
         // A hint, and only a hint: it routes when its domain is one of
@@ -566,24 +1459,31 @@ async fn authorize(
         if let Some(connection) = connections.iter().find(|connection| {
             connection.status == store::STATUS_ACTIVE && connection.domains.contains(&domain)
         }) {
-            return Ok(sso_start_redirect(&connection.id, &return_to()));
+            return Ok(sso_start_redirect(&connection.id, &return_to(None)));
         }
     }
 
-    let chooser = || {
-        let return_to = return_to();
-        let methods = enabled_login_methods(&*state.ctx.config, &return_to);
-        html(&LoginChooserTemplate {
-            brand: brand_of(&state),
-            has_passkey: methods.iter().any(|method| method.is_passkey),
-            methods,
-            return_to,
-        })
-    };
     let Some(session) = session else {
-        return Ok(chooser());
+        return Ok(chooser(
+            step_up_transaction.as_deref(),
+            browser_cookie.as_deref(),
+        ));
     };
+    // A live session that has to make the ceremony again (issue #912) gets
+    // the chooser, carrying this request and its transaction back, rather
+    // than a code.
+    if step_up_required {
+        return Ok(chooser(
+            step_up_transaction.as_deref(),
+            browser_cookie.as_deref(),
+        ));
+    }
 
+    let openid = query.scope.as_deref().is_some_and(|scope| {
+        scope
+            .split_ascii_whitespace()
+            .any(|value| value == "openid")
+    });
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|err| {
         tracing::error!(error = %err, "code entropy source failed");
@@ -604,6 +1504,18 @@ async fn authorize(
                     "redirect_uri": query.redirect_uri,
                     "code_challenge": query.code_challenge,
                     "sid": session.id,
+                    // The request's nonce, echoed into the ID token
+                    // (issue #912). Absent when the client sent none.
+                    "nonce": query.nonce,
+                    // Whether the request asked for an ID token (OpenID
+                    // Connect Core section 3.1.2.1).
+                    "openid": openid,
+                    // The context a spent step-up transaction earned, and when
+                    // it was spent. Only this code carries them: a refresh or
+                    // another client's code never does (issue #912, third
+                    // review).
+                    "acr": stepped_up_at.as_ref().map(|_| STEP_UP_ACR),
+                    "stepped_up_at": stepped_up_at,
                 })
                 .to_string(),
             ),
@@ -974,5 +1886,65 @@ mod tests {
         assert!(!is_base64url_43(
             "d+BjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjX"
         ));
+    }
+
+    #[test]
+    fn prompt_values_are_read_strictly() {
+        assert_eq!(parse_prompt(None), Ok(Prompt::default()));
+        assert_eq!(
+            parse_prompt(Some("login")),
+            Ok(Prompt {
+                none: false,
+                login: true
+            })
+        );
+        assert_eq!(
+            parse_prompt(Some("consent select_account")),
+            Ok(Prompt::default())
+        );
+        assert_eq!(
+            parse_prompt(Some("none")),
+            Ok(Prompt {
+                none: true,
+                login: false
+            })
+        );
+        // `none` is never combined, and an unknown value is refused.
+        assert_eq!(parse_prompt(Some("none login")), Err(()));
+        assert_eq!(parse_prompt(Some("bogus")), Err(()));
+        assert_eq!(parse_prompt(Some("login bogus")), Err(()));
+    }
+
+    #[test]
+    fn max_age_accepts_only_decimal_digits() {
+        assert_eq!(parse_max_age(None), Ok(None));
+        assert_eq!(parse_max_age(Some("0")), Ok(Some(0)));
+        assert_eq!(parse_max_age(Some("300")), Ok(Some(300)));
+        for bad in ["", "-1", "+5", "1.5", "abc", "99999999999"] {
+            assert_eq!(parse_max_age(Some(bad)), Err(()), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn stripping_a_demand_leaves_the_rest_of_the_request_intact() {
+        assert_eq!(
+            without_query_params(
+                "/v1/auth-core/authorize?client_id=c&prompt=login&state=s&max_age=0",
+                &["prompt", "max_age"]
+            ),
+            "/v1/auth-core/authorize?client_id=c&state=s"
+        );
+        assert_eq!(
+            without_query_params(
+                "/v1/auth-core/authorize?prompt=login",
+                &["prompt", "max_age"]
+            ),
+            "/v1/auth-core/authorize"
+        );
+        assert_eq!(
+            without_query_params("/v1/auth-core/authorize?state=x&promptx=1", &["prompt"]),
+            "/v1/auth-core/authorize?state=x&promptx=1"
+        );
+        assert_eq!(without_query_params("/plain", &["prompt"]), "/plain");
     }
 }

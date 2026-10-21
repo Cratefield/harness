@@ -72,7 +72,7 @@ fn internal(scope: &Scope) -> Problem {
     Problem::internal().instance(&scope.request_id)
 }
 
-fn bad_request(scope: &Scope, detail: impl Into<String>) -> Problem {
+pub(crate) fn bad_request(scope: &Scope, detail: impl Into<String>) -> Problem {
     Problem::validation_failed(detail).instance(&scope.request_id)
 }
 
@@ -156,6 +156,7 @@ async fn client_view(db: &dyn Database, row: &ClientRow) -> Result<Value, Proble
         "status": row.status,
         "created_at": row.created_at,
         "redirect_uris": redirect_uris_of(db, &row.id).await?,
+        "roles_claim": store::client_roles_claim(db, &row.id).await?,
     }))
 }
 
@@ -164,6 +165,10 @@ struct CreateBody {
     name: String,
     kind: String,
     redirect_uris: Vec<String>,
+    /// Whether this client's tokens carry the `roles` claim (issue #912).
+    /// Absent means no: a client gets roles only when it asks for them.
+    #[serde(default)]
+    roles_claim: bool,
 }
 
 async fn create(
@@ -202,6 +207,7 @@ async fn create(
     )
     .await?;
     store::replace_redirect_uris(&*db, &id, &body.redirect_uris).await?;
+    store::set_client_roles_claim(&*db, &id, body.roles_claim).await?;
 
     audit("client.create", &id);
     let mut response = json!({
@@ -210,6 +216,7 @@ async fn create(
         "kind": body.kind,
         "status": STATUS_ACTIVE,
         "redirect_uris": body.redirect_uris,
+        "roles_claim": body.roles_claim,
     });
     if let Some(secret) = plaintext {
         response["client_secret"] = json!(secret);
@@ -234,6 +241,7 @@ struct PatchBody {
     name: Option<String>,
     status: Option<String>,
     redirect_uris: Option<Vec<String>>,
+    roles_claim: Option<bool>,
 }
 
 async fn patch_client(
@@ -242,10 +250,14 @@ async fn patch_client(
     Path(id): Path<String>,
     Json(body): Json<PatchBody>,
 ) -> Result<Response, Problem> {
-    if body.name.is_none() && body.status.is_none() && body.redirect_uris.is_none() {
+    if body.name.is_none()
+        && body.status.is_none()
+        && body.redirect_uris.is_none()
+        && body.roles_claim.is_none()
+    {
         return Err(bad_request(
             &scope,
-            "nothing to change: name, status or redirect_uris",
+            "nothing to change: name, status, redirect_uris or roles_claim",
         ));
     }
     if let Some(status) = &body.status
@@ -278,6 +290,9 @@ async fn patch_client(
     }
     if let Some(uris) = &body.redirect_uris {
         store::replace_redirect_uris(&*db, &id, uris).await?;
+    }
+    if let Some(enabled) = body.roles_claim {
+        store::set_client_roles_claim(&*db, &id, enabled).await?;
     }
 
     audit("client.patch", &id);

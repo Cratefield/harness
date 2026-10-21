@@ -127,7 +127,7 @@ async fn a_valid_token_verifies_and_yields_its_claims() {
     let auth = client(http);
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -150,7 +150,11 @@ async fn an_sso_token_names_its_connection_and_only_that_one() {
     let mut payload = claims(CLIENT, ISSUER, NOW + 600);
     payload["sso_connection"] = json!("ssoc_1");
     payload["amr"] = json!(["sso"]);
-    let token = mint(&signing, &json!({"alg": "ES256", "kid": "k1"}), &payload);
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+        &payload,
+    );
 
     let verified = auth.verify(&token).await.expect("verifies");
     assert_eq!(verified.sso_connection.as_deref(), Some("ssoc_1"));
@@ -169,7 +173,11 @@ async fn an_sso_connection_without_the_amr_is_not_an_sso_sign_in() {
     let auth = client(FakeJwks::new(jwks_body(&[jwk])));
     let mut payload = claims(CLIENT, ISSUER, NOW + 600);
     payload["sso_connection"] = json!("ssoc_1");
-    let token = mint(&signing, &json!({"alg": "ES256", "kid": "k1"}), &payload);
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+        &payload,
+    );
 
     let verified = auth.verify(&token).await.expect("verifies");
     assert_eq!(verified.sso_connection.as_deref(), Some("ssoc_1"));
@@ -186,7 +194,7 @@ async fn a_token_for_another_client_is_refused() {
     let auth = client(FakeJwks::new(jwks_body(&[jwk])));
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(OTHER_CLIENT, ISSUER, NOW + 600),
     );
 
@@ -206,7 +214,7 @@ async fn a_token_from_another_issuer_is_refused() {
     let auth = client(FakeJwks::new(jwks_body(&[jwk])));
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, "https://evil.example", NOW + 600),
     );
 
@@ -222,7 +230,7 @@ async fn an_expired_token_is_refused() {
     let auth = client(FakeJwks::new(jwks_body(&[jwk])));
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW - 3600),
     );
 
@@ -273,7 +281,7 @@ async fn a_token_signed_by_an_unpublished_key_is_refused() {
     // Names the published kid, but is signed with a different key.
     let token = mint(
         &attacker,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -287,7 +295,7 @@ async fn a_tampered_payload_is_refused() {
     let auth = client(FakeJwks::new(jwks_body(&[jwk])));
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
     let mut parts: Vec<&str> = token.split('.').collect();
@@ -309,7 +317,7 @@ async fn the_key_set_is_cached_across_verifications() {
     let auth = client(Arc::clone(&http) as Arc<dyn HttpClient>);
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -331,7 +339,7 @@ async fn an_unknown_key_forces_one_refetch_and_is_then_rate_limited() {
     let auth = client(Arc::clone(&http) as Arc<dyn HttpClient>);
     let token = mint(
         &attacker,
-        &json!({"alg": "ES256", "kid": "k-not-published"}),
+        &json!({"alg": "ES256", "kid": "k-not-published", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -357,7 +365,7 @@ async fn a_private_key_in_the_published_set_is_ignored() {
     let auth = client(FakeJwks::new(jwks_body(&[jwk])));
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -405,12 +413,12 @@ async fn a_failed_refetch_keeps_the_previous_keys() {
     let auth = client(Arc::clone(&http) as Arc<dyn HttpClient>);
     let good = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
     let unknown = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k-missing"}),
+        &json!({"alg": "ES256", "kid": "k-missing", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -464,7 +472,7 @@ fn a_cold_cache_race_fetches_the_key_set_once() {
     let auth = Arc::new(client(Arc::clone(&http) as Arc<dyn HttpClient>));
     let token = mint(
         &signing,
-        &json!({"alg": "ES256", "kid": "k1"}),
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
         &claims(CLIENT, ISSUER, NOW + 600),
     );
 
@@ -508,4 +516,158 @@ async fn malformed_tokens_are_refused_without_panicking() {
             "{token:?} must be refused"
         );
     }
+}
+
+/// Issue #912 (review): an ID token is signed by the same key and carries
+/// the same audience as an access token, so it is refused by its `typ`
+/// before its claims are read as an access token's.
+#[pollster::test]
+async fn an_id_token_is_refused_as_an_access_token() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "JWT"}),
+        &claims(CLIENT, ISSUER, NOW + 600),
+    );
+    assert!(
+        matches!(auth.verify(&token).await, Err(VerifyError::Type(ref t)) if t == "JWT"),
+        "an ID token must not verify as an access token"
+    );
+}
+
+/// A token with no `typ` at all is not an access token either.
+#[pollster::test]
+async fn a_token_without_a_type_is_refused() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1"}),
+        &claims(CLIENT, ISSUER, NOW + 600),
+    );
+    assert!(matches!(
+        auth.verify(&token).await,
+        Err(VerifyError::Type(_))
+    ));
+}
+
+/// Issue #912: `auth_time` and `roles` are read, and `authenticated_within`
+/// says whether the person proved who they are recently enough. Verification
+/// alone does not answer that.
+#[pollster::test]
+async fn auth_time_and_roles_are_read_and_checked_by_the_relying_party() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let mut payload = claims(CLIENT, ISSUER, NOW + 600);
+    payload["auth_time"] = json!(NOW - 100);
+    payload["roles"] = json!(["owner"]);
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+        &payload,
+    );
+    let verified = auth.verify(&token).await.expect("verifies");
+    assert_eq!(verified.auth_time, Some(NOW - 100));
+    assert_eq!(verified.roles, vec!["owner".to_owned()]);
+    assert!(verified.authenticated_within(120, NOW));
+    assert!(
+        !verified.authenticated_within(60, NOW),
+        "100s is older than 60s"
+    );
+    assert!(
+        !verified.authenticated_within(120, NOW + 500),
+        "the window has passed"
+    );
+}
+
+/// A token minted before the claim existed has no `auth_time`, and a relying
+/// party that asks for freshness is told it is not fresh.
+#[pollster::test]
+async fn a_token_without_auth_time_is_never_fresh() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+        &claims(CLIENT, ISSUER, NOW + 600),
+    );
+    let verified = auth.verify(&token).await.expect("verifies");
+    assert_eq!(verified.auth_time, None);
+    assert!(verified.roles.is_empty());
+    assert!(!verified.authenticated_within(i64::MAX, NOW));
+}
+
+/// Issue #912, second review: a payment gate passes only a passkey or email
+/// ceremony that is recent. A federated, SSO or password sign-in does not,
+/// even when it is recent, and neither does an old passkey sign-in.
+#[pollster::test]
+async fn stepped_up_within_requires_a_recent_passkey_or_email() {
+    let (signing, jwk) = key(1);
+    let auth = client(FakeJwks::new(jwks_body(&[jwk])));
+    let mint_with = |amr: Value, auth_time: i64| {
+        let mut payload = claims(CLIENT, ISSUER, NOW + 600);
+        payload["auth_time"] = json!(auth_time);
+        payload["amr"] = amr;
+        payload["acr"] = json!("urn:cratefield:stepup");
+        mint(
+            &signing,
+            &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+            &payload,
+        )
+    };
+    let passkey = auth
+        .verify(&mint_with(json!(["passkey", "user"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(passkey.stepped_up_within(120, NOW));
+    assert_eq!(passkey.acr.as_deref(), Some("urn:cratefield:stepup"));
+
+    let email = auth
+        .verify(&mint_with(json!(["email"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(email.stepped_up_within(120, NOW));
+
+    // The same recent email login during the quiet period: no `acr` was
+    // issued for it, so it is not a step-up (issue #912, third review).
+    let mut plain = claims(CLIENT, ISSUER, NOW + 600);
+    plain["auth_time"] = json!(NOW - 30);
+    plain["amr"] = json!(["email"]);
+    let plain_token = mint(
+        &signing,
+        &json!({"alg": "ES256", "kid": "k1", "typ": "at+jwt"}),
+        &plain,
+    );
+    let plain = auth.verify(&plain_token).await.expect("verifies");
+    assert!(!plain.stepped_up_within(120, NOW), "no acr, no step-up");
+    assert!(plain.authenticated_within(120, NOW));
+
+    let federated = auth
+        .verify(&mint_with(json!(["federated"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(
+        !federated.stepped_up_within(120, NOW),
+        "a federated sign-in is not a step-up"
+    );
+    assert!(
+        federated.authenticated_within(120, NOW),
+        "it is recent, though"
+    );
+
+    let password = auth
+        .verify(&mint_with(json!(["pwd"]), NOW - 30))
+        .await
+        .expect("verifies");
+    assert!(!password.stepped_up_within(120, NOW));
+
+    let stale = auth
+        .verify(&mint_with(json!(["passkey"]), NOW - 600))
+        .await
+        .expect("verifies");
+    assert!(
+        !stale.stepped_up_within(120, NOW),
+        "an old passkey sign-in is not recent"
+    );
 }

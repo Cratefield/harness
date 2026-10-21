@@ -162,9 +162,9 @@ fn login_options_key_every_credential_by_its_id_when_there_are_several() {
     pollster::block_on(async {
         let kit = support::kit();
         let user = kit.user("nick@example.com").await;
-        let cookie = kit.sign_in(&user).await;
         let mut ids = Vec::new();
         for credential_id in [b"first-key".as_slice(), b"second-key".as_slice()] {
+            let cookie = kit.sign_in(&user).await;
             let options = post(&kit, REGISTER_OPTIONS, "{}", Some(&cookie))
                 .await
                 .json();
@@ -335,7 +335,9 @@ fn no_signal_at_creation_stays_unknown() {
         assert_eq!(quiet.json()["prf"], "unknown");
 
         // An explicit `enabled: false` is the same: never `unsupported` at
-        // registration, whatever the report says.
+        // registration, whatever the report says. A second passkey is a second
+        // change, so the session is a fresh ceremony again (issue #912).
+        let cookie = kit.sign_in(&user).await;
         let options = post(&kit, REGISTER_OPTIONS, "{}", Some(&cookie))
             .await
             .json();
@@ -588,10 +590,10 @@ fn deleting_a_passkey_deletes_its_salt_row() {
     pollster::block_on(async {
         let kit = support::kit();
         let user = kit.user("nick@example.com").await;
-        let cookie = kit.sign_in(&user).await;
 
         let mut ids = Vec::new();
         for credential_id in [b"kept-key".as_slice(), b"gone-key".as_slice()] {
+            let cookie = kit.sign_in(&user).await;
             let options = post(&kit, REGISTER_OPTIONS, "{}", Some(&cookie))
                 .await
                 .json();
@@ -607,6 +609,8 @@ fn deleting_a_passkey_deletes_its_salt_row() {
         }
         assert_eq!(support::count(&kit, "auth_passkeys_prf"), 2);
 
+        // Removing a passkey is a step-up too: a fresh ceremony.
+        let cookie = kit.sign_in(&user).await;
         let deleted = send(
             &kit,
             Method::DELETE,

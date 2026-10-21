@@ -22,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+mod account;
 mod authorize;
 /// The instance's branding (issue #777): display name, logo, accent,
 /// support address, footer and legal links, shared by every auth module.
@@ -32,7 +33,11 @@ pub use brand::Brand;
 // which meant nothing outside the crate could name either — the README
 // documents `AUTH_CORE_LOGIN_METHODS` and its vocabulary, and no caller
 // could ask for it.
-pub use authorize::{LOGIN_METHODS_KEY, known_method_slugs, sign_in_links};
+pub use authorize::{
+    LOGIN_METHODS_KEY, known_method_slugs, record_security_change, require_enrolment_ceremony,
+    require_recent_ceremony, require_recent_session, session_proves_by_passkey_or_email,
+    sign_in_links,
+};
 mod clients;
 /// Login CSRF (issue #439): the same-origin guard a state-changing route
 /// runs before it acts, and the 403 problem it answers with.
@@ -40,10 +45,14 @@ pub mod csrf;
 /// Changing the address an account is reached at (issue #648): the two
 /// routes, their mail, and the problem codes they answer with.
 pub mod email;
+pub use account::{
+    Guard, RECOVERY_CODE_COUNT, RECOVERY_REFUSED, captcha_passes, create_passkey_account,
+    guard_anonymous, issue_recovery_codes, record_notice, terms_versions,
+};
 pub use email::{
     ConfirmMail, EMAIL_CHANGE_TTL_SECS, EVENT_EMAIL_CHANGED, NoticeMail, REAUTHENTICATION_REQUIRED,
     RECENT_SECS, TEMPLATE_EMAIL_CHANGE_CONFIRM, TEMPLATE_EMAIL_CHANGE_NOTICE, TOKEN_REFUSED,
-    default_templates,
+    default_templates, notify_account, notify_passkey_change,
 };
 pub mod federated;
 // The server half of `fz auth import` (issue #650, part B): the admin
@@ -287,6 +296,70 @@ const MIGRATION_USER_ADMIN_AUDIT: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0012_user_admin_audit.sql"),
 );
 
+/// The step-up migration of issue #912: `users.role` (owner, admin or
+/// member), `users.reauth_requested_at` (a pending demand for a fresh
+/// ceremony) and `clients.roles_claim` (whether a client's tokens carry
+/// `roles`). Three additive columns, portable DDL, so the Postgres set
+/// reuses this file (ADR 0004).
+const MIGRATION_STEP_UP: SqlMigration = SqlMigration::new(
+    "0013",
+    "step_up",
+    include_str!("../migrations/sqlite/0013_step_up.sql"),
+);
+
+/// The step-up transaction table and the role audit of issue #912, review
+/// follow-up: the per-account demand column is dropped, and each demand
+/// becomes a single-use transaction bound to an account and a client.
+/// Portable DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_STEP_UP_TRANSACTIONS: SqlMigration = SqlMigration::new(
+    "0014",
+    "step_up_transactions",
+    include_str!("../migrations/sqlite/0014_step_up_transactions.sql"),
+);
+
+/// The step-up hardening of issue #912, second review: the account's last
+/// security change, the session's authentication context and its creation
+/// time to the millisecond, and transactions that may belong to no account
+/// yet. Portable DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_STEP_UP_HARDENING: SqlMigration = SqlMigration::new(
+    "0015",
+    "step_up_hardening",
+    include_str!("../migrations/sqlite/0015_step_up_hardening.sql"),
+);
+
+/// The Postgres form of the hardening migration: `created_ms` is BIGINT there.
+const MIGRATION_STEP_UP_HARDENING_POSTGRES: SqlMigration = SqlMigration::new(
+    "0015",
+    "step_up_hardening",
+    include_str!("../migrations/postgres/0015_step_up_hardening.sql"),
+);
+
+/// The third review's forward-only follow-up: the authentication context moves
+/// from the session to the authorization code, so the session column 0015
+/// added is dropped again.
+const MIGRATION_STEP_UP_ACR_IN_CODES: SqlMigration = SqlMigration::new(
+    "0016",
+    "step_up_acr_in_codes",
+    include_str!("../migrations/sqlite/0016_step_up_acr_in_codes.sql"),
+);
+
+/// The passkey-first sign-up migration of issue #914: recovery codes, the
+/// in-app security notices, and the terms an account accepted at sign-up.
+/// Portable DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_PASSKEY_FIRST_SIGNUP: SqlMigration = SqlMigration::new(
+    "0017",
+    "passkey_first_signup",
+    include_str!("../migrations/sqlite/0017_passkey_first_signup.sql"),
+);
+
+/// The recovery-code lookup of issue #914's security review: a public lookup id
+/// finds one row, and the secret is stored as SHA-256 rather than Argon2.
+const MIGRATION_RECOVERY_LOOKUP: SqlMigration = SqlMigration::new(
+    "0018",
+    "recovery_lookup",
+    include_str!("../migrations/sqlite/0018_recovery_lookup.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -364,20 +437,19 @@ impl Module for AuthCore {
         env!("CARGO_PKG_VERSION")
     }
 
+    /// The rate limiter is required (issue #912, fifth review). Anonymous step-up
+    /// demands are the one place an outsider can make this service store rows,
+    /// and without a limiter nothing bounds them: a deployment with none fails
+    /// to start rather than run unguarded. `Mailer` stays optional: a deployment
+    /// with no mailer still answers `/email/change` `202` and sends nothing.
     fn requires(&self) -> &'static [Port] {
-        &[Port::Db, Port::Clock, Port::IdGen]
+        &[Port::Db, Port::Clock, Port::IdGen, Port::RateLimiter]
     }
 
-    /// `Mailer` and `RateLimiter` are the two defences issue #648's email
-    /// change can leave out, and both are deliberate: a deployment with
-    /// no mailer still answers `/email/change` `202` and simply sends
-    /// nothing, and a deployment with no limiter still answers — the
-    /// guards behind this are the password credential's own lockout and
-    /// the token's guarded single-use consume. Requiring either would
-    /// take every auth-core deployment down with them, which is the
-    /// harness's standing production rule for optional ports.
     fn optional(&self) -> &'static [Port] {
-        &[Port::Mailer, Port::RateLimiter]
+        // The captcha guards the anonymous sign-up and recovery routes (issue
+        // #914); a deployment without one runs them unguarded by it.
+        &[Port::Mailer, Port::Captcha]
     }
 
     /// The one event issue #648 adds. `user_id` only, never an address.
@@ -418,6 +490,13 @@ impl Module for AuthCore {
             "sso_connections",
             // Issue #854: one row per admin enable/disable of an account.
             "user_admin_audit",
+            // Issue #912: one row per step-up demand, and per role change.
+            "step_up_transactions",
+            "user_role_audit",
+            // Issue #914: recovery codes, in-app notices, accepted terms.
+            "recovery_codes",
+            "security_notices",
+            "terms_acceptances",
         ]
     }
 
@@ -534,6 +613,56 @@ impl Module for AuthCore {
                 redacted: &[],
                 subject_via: None,
             },
+            PersonalDataSet {
+                table: "user_role_audit",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The record of an operator changing your role in this \
+                              instance: which role, and when.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "recovery_codes",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "Your recovery codes, kept only as a one-way hash: which ones \
+                              you have used, and when they were made.",
+                redacted: &["code_hash"],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "security_notices",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The notices about your sign-in that the service showed you: a \
+                              passkey added or removed, a recovery code used.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "terms_acceptances",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The terms and privacy versions you accepted when you signed up, \
+                              and when.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "step_up_transactions",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "A record that you were asked to sign in again for an \
+                              application, and when. Carries no credential.",
+                redacted: &["token_hash"],
+                subject_via: None,
+            },
             // The two registration tables. They are the one place in this
             // module that holds a secret and no person: an application's
             // secret is not somebody's credential, and no column here names a
@@ -600,7 +729,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 12] = [
+        const MIGRATIONS: [SqlMigration; 18] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -613,17 +742,23 @@ impl Module for AuthCore {
             MIGRATION_SSO_CONNECTIONS,
             MIGRATION_EMAIL_CHANGE,
             MIGRATION_USER_ADMIN_AUDIT,
+            MIGRATION_STEP_UP,
+            MIGRATION_STEP_UP_TRANSACTIONS,
+            MIGRATION_STEP_UP_HARDENING,
+            MIGRATION_STEP_UP_ACR_IN_CODES,
+            MIGRATION_PASSKEY_FIRST_SIGNUP,
+            MIGRATION_RECOVERY_LOOKUP,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all twelve: the six whose SQL truly
+        // Postgres list carries all thirteen: the six whose SQL truly
         // differs (BYTEA for the byte columns in four, the in-place CHECK
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 12] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 18] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -636,6 +771,12 @@ impl Module for AuthCore {
             MIGRATION_SSO_CONNECTIONS_POSTGRES,
             MIGRATION_EMAIL_CHANGE_POSTGRES,
             MIGRATION_USER_ADMIN_AUDIT,
+            MIGRATION_STEP_UP,
+            MIGRATION_STEP_UP_TRANSACTIONS,
+            MIGRATION_STEP_UP_HARDENING_POSTGRES,
+            MIGRATION_STEP_UP_ACR_IN_CODES,
+            MIGRATION_PASSKEY_FIRST_SIGNUP,
+            MIGRATION_RECOVERY_LOOKUP,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -746,6 +887,14 @@ impl Module for AuthCore {
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
+        // Passkey-first sign-up and recovery are anonymous writes, and they refuse
+        // without a captcha (issue #914). A deployment that enables them with no
+        // captcha port is logged loudly at boot; each request is then refused.
+        if account::terms_versions(&*ctx.config).is_some() && ctx.ports.captcha.is_none() {
+            tracing::error!(
+                "sign-up and recovery are enabled (terms versions are set) but no captcha port is configured; every request to them is refused"
+            );
+        }
         let keys = match tokens::SigningKeys::from_config(&*ctx.config) {
             Ok(keys) => keys.map(Arc::new),
             // `validate_config` reports this at doctor time; at runtime
@@ -765,7 +914,9 @@ impl Module for AuthCore {
             tokens: Arc::clone(&self.signing),
             mail,
         });
-        clients::router(Arc::clone(&state))
+        account::router()
+            .with_state(Arc::clone(&state))
+            .merge(clients::router(Arc::clone(&state)))
             .merge(sessions::router().with_state(Arc::clone(&state)))
             .merge(authorize::router().with_state(Arc::clone(&state)))
             .merge(import::router(Arc::clone(&state)))
@@ -807,8 +958,11 @@ mod tests {
         assert_eq!(module.name(), "auth-core");
         assert_eq!(module.version(), env!("CARGO_PKG_VERSION"));
         assert_eq!(module.harness_api(), HARNESS_API);
-        assert_eq!(module.requires(), [Port::Db, Port::Clock, Port::IdGen]);
-        assert_eq!(module.optional(), [Port::Mailer, Port::RateLimiter]);
+        assert_eq!(
+            module.requires(),
+            [Port::Db, Port::Clock, Port::IdGen, Port::RateLimiter]
+        );
+        assert_eq!(module.optional(), [Port::Mailer, Port::Captcha]);
         assert_eq!(module.emits(), [email::EVENT_EMAIL_CHANGED]);
         assert_eq!(
             module.tables(),
@@ -826,7 +980,14 @@ mod tests {
                 // Issue #627: the per-organization SSO connections.
                 "sso_connections",
                 // Issue #854: the enable/disable audit trail.
-                "user_admin_audit"
+                "user_admin_audit",
+                // Issue #912: the role-change audit and the step-up transactions.
+                "step_up_transactions",
+                "user_role_audit",
+                // Issue #914: recovery codes, in-app notices, accepted terms.
+                "recovery_codes",
+                "security_notices",
+                "terms_acceptances",
             ]
         );
         assert!(!module.public_writes());
@@ -889,9 +1050,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 12);
+        assert_eq!(migrations.sqlite.len(), 18);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -916,10 +1078,22 @@ mod tests {
         assert_eq!(migrations.sqlite[10].name, "email_change");
         assert_eq!(migrations.sqlite[11].id, "0012");
         assert_eq!(migrations.sqlite[11].name, "user_admin_audit");
+        assert_eq!(migrations.sqlite[12].id, "0013");
+        assert_eq!(migrations.sqlite[12].name, "step_up");
+        assert_eq!(migrations.sqlite[13].id, "0014");
+        assert_eq!(migrations.sqlite[13].name, "step_up_transactions");
+        assert_eq!(migrations.sqlite[14].id, "0015");
+        assert_eq!(migrations.sqlite[14].name, "step_up_hardening");
+        assert_eq!(migrations.sqlite[15].id, "0016");
+        assert_eq!(migrations.sqlite[15].name, "step_up_acr_in_codes");
+        assert_eq!(migrations.sqlite[16].id, "0017");
+        assert_eq!(migrations.sqlite[16].name, "passkey_first_signup");
+        assert_eq!(migrations.sqlite[17].id, "0018");
+        assert_eq!(migrations.sqlite[17].name, "recovery_lookup");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 12);
+        assert_eq!(migrations.postgres.len(), 18);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -964,6 +1138,31 @@ mod tests {
             "the audit table is portable DDL, so Postgres reuses the sqlite file"
         );
         assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
+        // The step-up columns are portable DDL too (issue #912).
+        assert_eq!(
+            migrations.postgres[12].sql, migrations.sqlite[12].sql,
+            "the step-up columns are portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
+            migrations.postgres[13].sql, migrations.sqlite[13].sql,
+            "the step-up tables are portable DDL, so Postgres reuses the sqlite file"
+        );
+        // Postgres needs BIGINT for the millisecond column, so its form of this
+        // migration is its own file (issue #912, third review).
+        assert_ne!(migrations.postgres[14].sql, migrations.sqlite[14].sql);
+        assert!(migrations.postgres[14].sql.contains("BIGINT"));
+        assert_eq!(
+            migrations.postgres[15].sql, migrations.sqlite[15].sql,
+            "the acr move is portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
+            migrations.postgres[16].sql, migrations.sqlite[16].sql,
+            "the sign-up tables are portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
+            migrations.postgres[17].sql, migrations.sqlite[17].sql,
+            "the recovery lookup is portable DDL, so Postgres reuses the sqlite file"
+        );
         assert_eq!(
             migrations.postgres[6].sql, migrations.sqlite[6].sql,
             "the locale column is portable DDL, so Postgres reuses the sqlite file"
