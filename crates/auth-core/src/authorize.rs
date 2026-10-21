@@ -513,23 +513,29 @@ const MAX_OPEN_ANONYMOUS_HINT_PER_ACCOUNT: usize = 5;
 
 /// The rate limit an anonymous caller's demands are held to, per caller
 /// address. `None` when the caller is within it, or when there is no limiter.
+///
+/// `Err` when the limiter itself fails: an anonymous demand is then refused
+/// (fail closed), because nothing bounds it while the limiter is down (issue
+/// #912, final review).
 async fn step_up_limit(
     state: &ModuleState,
     headers: &HeaderMap,
-) -> Option<cratefield_core::Decision> {
-    let limiter = state.ctx.ports.rate_limiter.as_deref()?;
+) -> Result<Option<cratefield_core::Decision>, ()> {
+    let Some(limiter) = state.ctx.ports.rate_limiter.as_deref() else {
+        return Err(());
+    };
     let ip = cratefield_core::client_ip(headers);
     for key in cratefield_core::rate_limit_keys(ip.as_deref(), None) {
         match limiter.limit(&format!("auth-core:step-up:{key}")).await {
-            Ok(decision) if !decision.ok => return Some(decision),
+            Ok(decision) if !decision.ok => return Ok(Some(decision)),
             Ok(_) => {}
             Err(err) => {
-                tracing::warn!(error = %err, "the auth-core rate limiter is unavailable");
-                return None;
+                tracing::error!(error = %err, "the auth-core rate limiter failed; refusing an anonymous demand");
+                return Err(());
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// The most open transactions one account may hold. The oldest are dropped
@@ -1231,8 +1237,18 @@ async fn authorize(
             // outsider can make this service store, so each caller is
             // rate-limited and each client's open ones are capped (issue #912,
             // third review).
-            if let Some(decision) = step_up_limit(&state, &headers).await {
-                return Ok(cratefield_core::rate_limited(&decision).into_response());
+            match step_up_limit(&state, &headers).await {
+                Ok(None) => {}
+                Ok(Some(decision)) => {
+                    return Ok(cratefield_core::rate_limited(&decision).into_response());
+                }
+                Err(()) => {
+                    return Ok(oauth_error_redirect(
+                        &query.redirect_uri,
+                        "temporarily_unavailable",
+                        query.state.as_deref(),
+                    ));
+                }
             }
             // A login_hint that names an account binds the demand to that
             // account now, so a ceremony by anyone else cannot answer it (login
@@ -1267,14 +1283,22 @@ async fn authorize(
                     .await?
                     {
                         Some(value) => value,
-                        // The account already holds its anonymous demands: this
-                        // one is refused, and no signed-in demand is touched.
+                        // The account already holds its anonymous demands. Rather
+                        // than refuse, this request gets the same ordinary
+                        // browser-bound demand an unknown address gets, so the
+                        // response does not reveal whether the account exists
+                        // (issue #912, final review). No signed-in demand is
+                        // touched either way.
                         None => {
-                            return Ok(oauth_error_redirect(
-                                &query.redirect_uri,
-                                "temporarily_unavailable",
-                                query.state.as_deref(),
-                            ));
+                            new_step_up(
+                                &*db,
+                                &*clock,
+                                &*id_gen,
+                                None,
+                                &query.client_id,
+                                Some(issued.clone()),
+                            )
+                            .await?
                         }
                     }
                 }

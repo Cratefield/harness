@@ -1713,9 +1713,9 @@ async fn anonymous_login_hint_demands_never_evict_a_signed_in_demand() {
             refused += 1;
         }
     }
-    assert!(
-        refused > 0,
-        "past its own cap, an anonymous hint demand is refused"
+    assert_eq!(
+        refused, 0,
+        "past its own cap, an anonymous hint is answered as an unknown address is"
     );
     clock_advance_ms(&clock, 1000);
     let fresh = session_now(&kit, &clock, "victim", &["passkey", "user"]).await;
@@ -1774,4 +1774,135 @@ async fn a_login_hint_demand_is_spent_by_its_account_only() {
     )
     .await;
     assert!(is_code(&headers), "the named account spends it");
+}
+
+/// Final review (K2): past an account's cap of anonymous `login_hint` demands,
+/// a request naming that account gets the same answer an unknown address gets.
+/// The response reveals nothing about whether the account exists.
+#[pollster::test]
+async fn an_account_at_its_anonymous_hint_cap_answers_like_an_unknown_address() {
+    let (kit, _clock) = kit();
+    seed_user(&kit, "victim").await;
+    let a = client(&kit, false).await;
+    for _ in 0..5 {
+        let (status, _, _) = authorize(
+            &kit,
+            &a,
+            "&prompt=login&login_hint=victim%40example.com",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    // The sixth request, for the real account and for an unknown one.
+    let (real_status, real_headers, real_body) = authorize(
+        &kit,
+        &a,
+        "&prompt=login&login_hint=victim%40example.com",
+        None,
+    )
+    .await;
+    let (unknown_status, unknown_headers, unknown_body) = authorize(
+        &kit,
+        &a,
+        "&prompt=login&login_hint=nobody%40example.com",
+        None,
+    )
+    .await;
+    assert_eq!(real_status, unknown_status);
+    assert_eq!(real_status, StatusCode::OK);
+    assert!(real_headers.get(header::LOCATION).is_none());
+    assert!(unknown_headers.get(header::LOCATION).is_none());
+    assert_eq!(
+        real_headers.get(header::SET_COOKIE).is_some(),
+        unknown_headers.get(header::SET_COOKIE).is_some()
+    );
+    assert!(transaction_in(&real_body).is_some());
+    assert!(transaction_in(&unknown_body).is_some());
+    assert_eq!(
+        real_body.len(),
+        unknown_body.len(),
+        "the two pages have the same shape"
+    );
+}
+
+/// A rate limiter whose every call fails, the way a broken binding does.
+struct BrokenLimiter;
+
+#[async_trait::async_trait]
+impl cratefield_core::RateLimiter for BrokenLimiter {
+    async fn limit(
+        &self,
+        key: &str,
+    ) -> Result<cratefield_core::Decision, cratefield_core::RateLimitError> {
+        // The step-up keys fail, the way a broken binding does; everything
+        // else (the client registration) is allowed.
+        if key.starts_with("auth-core:step-up:") {
+            return Err(cratefield_core::RateLimitError::Transport(
+                "binding is down".to_owned(),
+            ));
+        }
+        Ok(cratefield_core::Decision {
+            ok: true,
+            retry_after: None,
+            quota: None,
+        })
+    }
+}
+
+/// Final review (limiter failure): an anonymous demand is refused when the
+/// limiter itself fails, rather than let through unbounded. A signed-in demand
+/// does not consult the limiter and proceeds.
+#[pollster::test]
+async fn a_failing_limiter_refuses_anonymous_demands_and_not_signed_in_ones() {
+    let kit = TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
+        ports.config = Arc::new(MapConfig::from_pairs([
+            (
+                "AUTH_CORE_SIGNING_KEYS",
+                serde_json::to_string(&vec![dummy_key("k1")]).expect("keys json"),
+            ),
+            ("AUTH_CORE_SIGNING_KEY_ACTIVE", "k1".to_owned()),
+            ("AUTH_CORE_ISSUER", ISSUER.to_owned()),
+            ("ADMIN_TOKEN", ADMIN.to_owned()),
+            ("AUTH_CORE_LOGIN_METHODS", "google,magic-link".to_owned()),
+        ]));
+        ports.rate_limiter = Some(Arc::new(BrokenLimiter));
+    });
+    let clock =
+        ManualClock::new(OffsetDateTime::from_unix_timestamp(EPOCH - 600).expect("epoch in range"));
+    seed_user(&kit, "u1").await;
+    let a = client_past_a_broken_limiter(&kit).await;
+    let (status, headers, _) = authorize(&kit, &a, "&prompt=login", None).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert!(
+        location(&headers).contains("error=temporarily_unavailable"),
+        "an anonymous demand is refused while the limiter is down"
+    );
+    let old = session_ago(&kit, &clock, "u1", 600, &["passkey", "user"]).await;
+    let (status, headers, body) = authorize(&kit, &a, "&prompt=login", Some(&old)).await;
+    assert_eq!(status, StatusCode::OK, "a signed-in demand proceeds");
+    assert!(transaction_in(&body).is_some(), "{headers:?}");
+}
+
+/// A client registered without consulting the limiter: the broken limiter
+/// would refuse the admin call too.
+async fn client_past_a_broken_limiter(kit: &TestHarness) -> String {
+    let (status, text) = admin(
+        kit,
+        Method::POST,
+        "/admin/clients",
+        Some(json!({
+            "name": "Undercover Rockstars",
+            "kind": "public",
+            "redirect_uris": [REDIRECT],
+            "roles_claim": false,
+        })),
+        Some(ADMIN),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{text}");
+    serde_json::from_str::<Value>(&text).expect("json")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned()
 }

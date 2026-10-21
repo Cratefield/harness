@@ -147,6 +147,23 @@ Discovery advertises `prompt_values_supported` (`none`, `login`, `consent`,
 Relying parties must check freshness themselves: `cratefield-auth-client`
 exposes `authenticated_within`.
 
+**Downstream gates must use `stepped_up_within`.** Payments, signatures and
+other irreversible approvals check `stepped_up_within(secs, now)` in
+`cratefield-auth-client`, not `authenticated_within`. It requires the `acr`
+the code that spent a step-up transaction carried, a passkey or email `amr`,
+and a recent `auth_time`. `authenticated_within` alone accepts any recent
+sign-in.
+
+**Accepted residual.** On an account with no passkey, a fresh email session
+(or a password-only session, which enrolls a passkey and is notified as a
+change) can enrol its first passkey. A session created by an email ceremony
+in the last two minutes is enough, and the enrolment is exempt from the quiet
+period by design, so the passkey can satisfy a step-up at once. The account's
+owner is notified on every passkey enrolment that is mailed, and a
+password-only or federated enrolment starts the 24-hour quiet period. A
+passkey-only account with no address gets no notice (see #914). Accepted for
+#913; #914 adds an in-app notice record for the case without an address.
+
 ## The email change (#648)
 
 `POST /email/change` answers `202` and one body whether the address is
