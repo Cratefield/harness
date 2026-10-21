@@ -56,6 +56,8 @@ async fn options(
     let session = require_session(&state, &headers, &scope).await?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
+    // Enrolling a passkey takes a fresh ceremony (issue #912, third review).
+    enrolment_gate(db, clock, &session, &scope).await?;
 
     let user = user_by_id(db, &session.user_id)
         .await
@@ -165,6 +167,7 @@ pub(crate) struct VerifyBody {
 const MAX_LABEL_CHARS: usize = 64;
 
 /// Step two: check the ceremony and store the credential.
+#[allow(clippy::too_many_lines)]
 async fn verify(
     State(state): State<Arc<ModuleState>>,
     scope: Scope,
@@ -177,6 +180,10 @@ async fn verify(
     let session = require_session(&state, &headers, &scope).await?;
     let rp = state.rp()?;
     let (db, clock, id_gen) = ports(&state)?;
+    // Enrolling a passkey takes a fresh ceremony; the first one needs only a
+    // fresh sign-in by any method, and is no change to the account's quiet
+    // period (issue #912, third review).
+    let first = enrolment_gate(db, clock, &session, &scope).await?;
 
     // Read as a value first, because the client extension results carry a
     // field the typed wire structs have no place for; a PRF result is
@@ -283,6 +290,24 @@ async fn verify(
         }),
     );
 
+    // A passkey added to an account that already had one is a change to its
+    // sign-in: the next day's passkey and email ceremonies stop counting as a
+    // step-up. So is a first passkey enrolled without a passkey or email
+    // ceremony. A first passkey enrolled with one is not (issue #912). The
+    // address is told either way.
+    // A first passkey enrolled from a session that proved itself with a password
+    // or a federated sign-in is a change all the same: the passkey signs in at
+    // once, but cannot satisfy a step-up for a day (issue #912, fifth review).
+    let strong = cratefield_auth_core::session_proves_by_passkey_or_email(db, &session.id).await;
+    if (!first || !strong)
+        && let Err(err) =
+            cratefield_auth_core::record_security_change(db, clock, &session.user_id).await
+    {
+        tracing::error!(error = %err, "could not record the passkey change");
+        return Err(internal(&scope));
+    }
+    cratefield_auth_core::notify_passkey_change(&state.ctx, &session.user_id, "added").await;
+
     // `prf` and `prfSalt` name what the row actually holds, so they are
     // only sent when it was written; a client that got neither reads the
     // truth at the next login, when the row is created.
@@ -325,6 +350,36 @@ async fn record_prf(
             None
         }
     }
+}
+
+/// The gate on enrolling a passkey (issue #912, third review). The account's
+/// first passkey needs only a fresh sign-in by any method, so a password-only
+/// or federated-only account can enrol one. A later passkey needs a passkey or
+/// email ceremony, and the account must be quiet. Returns whether this is the
+/// first passkey.
+async fn enrolment_gate(
+    db: &dyn cratefield_core::Database,
+    clock: &dyn cratefield_core::Clock,
+    session: &cratefield_auth_core::ValidSession,
+    scope: &Scope,
+) -> Result<bool, Problem> {
+    let existing = credentials_by_user(db, &session.user_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "could not read existing credentials");
+            internal(scope)
+        })?;
+    let first = !existing.iter().any(|row| row.kind == CREDENTIAL_PASSKEY);
+    if first {
+        cratefield_auth_core::require_recent_session(db, clock, &session.id)
+            .await
+            .map_err(|problem| problem.instance(&scope.request_id))?;
+    } else {
+        cratefield_auth_core::require_recent_ceremony(db, clock, &session.id, &session.user_id)
+            .await
+            .map_err(|problem| problem.instance(&scope.request_id))?;
+    }
+    Ok(first)
 }
 
 /// Stores the passkey row and returns its id.
@@ -421,7 +476,13 @@ async fn remove(
     Path(id): Path<String>,
 ) -> Result<Response, Problem> {
     let session = require_session(&state, &headers, &scope).await?;
-    let (db, _, _) = ports(&state)?;
+    let (db, clock, _) = ports(&state)?;
+    // Adding or removing a passkey needs a passkey or email ceremony in the
+    // last two minutes (issue #912, second review): a stolen session cannot
+    // enrol a passkey of its own.
+    cratefield_auth_core::require_recent_ceremony(db, clock, &session.id, &session.user_id)
+        .await
+        .map_err(|problem| problem.instance(&scope.request_id))?;
 
     let credentials = credentials_by_user(db, &session.user_id)
         .await
@@ -457,6 +518,9 @@ async fn remove(
             tracing::error!(error = %err, "could not delete the passkey");
             internal(&scope)
         })?;
+    // Removing a passkey starts no quiet period: a lost one must not block
+    // enrolling its replacement (issue #912, third review). The address is told.
+    cratefield_auth_core::notify_passkey_change(&state.ctx, &session.user_id, "removed").await;
     // The PRF salt row goes with its credential. A row that survived would
     // be inert — reads filter against live credentials — but inert rows
     // are still clutter.

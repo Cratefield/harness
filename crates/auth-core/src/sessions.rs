@@ -92,7 +92,7 @@ fn plus_days(t: OffsetDateTime, days: i64) -> OffsetDateTime {
     t.saturating_add(time::Duration::days(days))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -340,6 +340,11 @@ async fn issue_for(
         },
     )
     .await?;
+    // To the millisecond, for the step-up check that a ceremony came after a
+    // demand made in the same second (issue #912, second review).
+    let created_ms =
+        i64::try_from(clock.now().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX);
+    store::set_session_created_ms(db, &session_id, created_ms).await?;
 
     audit("session.issue", login.user_id);
     Ok(IssuedSession {

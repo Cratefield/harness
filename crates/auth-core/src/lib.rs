@@ -32,7 +32,10 @@ pub use brand::Brand;
 // which meant nothing outside the crate could name either — the README
 // documents `AUTH_CORE_LOGIN_METHODS` and its vocabulary, and no caller
 // could ask for it.
-pub use authorize::{LOGIN_METHODS_KEY, known_method_slugs, sign_in_links};
+pub use authorize::{
+    LOGIN_METHODS_KEY, known_method_slugs, record_security_change, require_recent_ceremony,
+    require_recent_session, session_proves_by_passkey_or_email, sign_in_links,
+};
 mod clients;
 /// Login CSRF (issue #439): the same-origin guard a state-changing route
 /// runs before it acts, and the 403 problem it answers with.
@@ -43,7 +46,7 @@ pub mod email;
 pub use email::{
     ConfirmMail, EMAIL_CHANGE_TTL_SECS, EVENT_EMAIL_CHANGED, NoticeMail, REAUTHENTICATION_REQUIRED,
     RECENT_SECS, TEMPLATE_EMAIL_CHANGE_CONFIRM, TEMPLATE_EMAIL_CHANGE_NOTICE, TOKEN_REFUSED,
-    default_templates,
+    default_templates, notify_passkey_change,
 };
 pub mod federated;
 // The server half of `fz auth import` (issue #650, part B): the admin
@@ -287,6 +290,53 @@ const MIGRATION_USER_ADMIN_AUDIT: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0012_user_admin_audit.sql"),
 );
 
+/// The step-up migration of issue #912: `users.role` (owner, admin or
+/// member), `users.reauth_requested_at` (a pending demand for a fresh
+/// ceremony) and `clients.roles_claim` (whether a client's tokens carry
+/// `roles`). Three additive columns, portable DDL, so the Postgres set
+/// reuses this file (ADR 0004).
+const MIGRATION_STEP_UP: SqlMigration = SqlMigration::new(
+    "0013",
+    "step_up",
+    include_str!("../migrations/sqlite/0013_step_up.sql"),
+);
+
+/// The step-up transaction table and the role audit of issue #912, review
+/// follow-up: the per-account demand column is dropped, and each demand
+/// becomes a single-use transaction bound to an account and a client.
+/// Portable DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_STEP_UP_TRANSACTIONS: SqlMigration = SqlMigration::new(
+    "0014",
+    "step_up_transactions",
+    include_str!("../migrations/sqlite/0014_step_up_transactions.sql"),
+);
+
+/// The step-up hardening of issue #912, second review: the account's last
+/// security change, the session's authentication context and its creation
+/// time to the millisecond, and transactions that may belong to no account
+/// yet. Portable DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_STEP_UP_HARDENING: SqlMigration = SqlMigration::new(
+    "0015",
+    "step_up_hardening",
+    include_str!("../migrations/sqlite/0015_step_up_hardening.sql"),
+);
+
+/// The Postgres form of the hardening migration: `created_ms` is BIGINT there.
+const MIGRATION_STEP_UP_HARDENING_POSTGRES: SqlMigration = SqlMigration::new(
+    "0015",
+    "step_up_hardening",
+    include_str!("../migrations/postgres/0015_step_up_hardening.sql"),
+);
+
+/// The third review's forward-only follow-up: the authentication context moves
+/// from the session to the authorization code, so the session column 0015
+/// added is dropped again.
+const MIGRATION_STEP_UP_ACR_IN_CODES: SqlMigration = SqlMigration::new(
+    "0016",
+    "step_up_acr_in_codes",
+    include_str!("../migrations/sqlite/0016_step_up_acr_in_codes.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -364,20 +414,17 @@ impl Module for AuthCore {
         env!("CARGO_PKG_VERSION")
     }
 
+    /// The rate limiter is required (issue #912, fifth review). Anonymous step-up
+    /// demands are the one place an outsider can make this service store rows,
+    /// and without a limiter nothing bounds them: a deployment with none fails
+    /// to start rather than run unguarded. `Mailer` stays optional: a deployment
+    /// with no mailer still answers `/email/change` `202` and sends nothing.
     fn requires(&self) -> &'static [Port] {
-        &[Port::Db, Port::Clock, Port::IdGen]
+        &[Port::Db, Port::Clock, Port::IdGen, Port::RateLimiter]
     }
 
-    /// `Mailer` and `RateLimiter` are the two defences issue #648's email
-    /// change can leave out, and both are deliberate: a deployment with
-    /// no mailer still answers `/email/change` `202` and simply sends
-    /// nothing, and a deployment with no limiter still answers — the
-    /// guards behind this are the password credential's own lockout and
-    /// the token's guarded single-use consume. Requiring either would
-    /// take every auth-core deployment down with them, which is the
-    /// harness's standing production rule for optional ports.
     fn optional(&self) -> &'static [Port] {
-        &[Port::Mailer, Port::RateLimiter]
+        &[Port::Mailer]
     }
 
     /// The one event issue #648 adds. `user_id` only, never an address.
@@ -418,6 +465,9 @@ impl Module for AuthCore {
             "sso_connections",
             // Issue #854: one row per admin enable/disable of an account.
             "user_admin_audit",
+            // Issue #912: one row per step-up demand, and per role change.
+            "step_up_transactions",
+            "user_role_audit",
         ]
     }
 
@@ -534,6 +584,26 @@ impl Module for AuthCore {
                 redacted: &[],
                 subject_via: None,
             },
+            PersonalDataSet {
+                table: "user_role_audit",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The record of an operator changing your role in this \
+                              instance: which role, and when.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "step_up_transactions",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "A record that you were asked to sign in again for an \
+                              application, and when. Carries no credential.",
+                redacted: &["token_hash"],
+                subject_via: None,
+            },
             // The two registration tables. They are the one place in this
             // module that holds a secret and no person: an application's
             // secret is not somebody's credential, and no column here names a
@@ -600,7 +670,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 12] = [
+        const MIGRATIONS: [SqlMigration; 16] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -613,17 +683,21 @@ impl Module for AuthCore {
             MIGRATION_SSO_CONNECTIONS,
             MIGRATION_EMAIL_CHANGE,
             MIGRATION_USER_ADMIN_AUDIT,
+            MIGRATION_STEP_UP,
+            MIGRATION_STEP_UP_TRANSACTIONS,
+            MIGRATION_STEP_UP_HARDENING,
+            MIGRATION_STEP_UP_ACR_IN_CODES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all twelve: the six whose SQL truly
+        // Postgres list carries all thirteen: the six whose SQL truly
         // differs (BYTEA for the byte columns in four, the in-place CHECK
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 12] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 16] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -636,6 +710,10 @@ impl Module for AuthCore {
             MIGRATION_SSO_CONNECTIONS_POSTGRES,
             MIGRATION_EMAIL_CHANGE_POSTGRES,
             MIGRATION_USER_ADMIN_AUDIT,
+            MIGRATION_STEP_UP,
+            MIGRATION_STEP_UP_TRANSACTIONS,
+            MIGRATION_STEP_UP_HARDENING_POSTGRES,
+            MIGRATION_STEP_UP_ACR_IN_CODES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -807,8 +885,11 @@ mod tests {
         assert_eq!(module.name(), "auth-core");
         assert_eq!(module.version(), env!("CARGO_PKG_VERSION"));
         assert_eq!(module.harness_api(), HARNESS_API);
-        assert_eq!(module.requires(), [Port::Db, Port::Clock, Port::IdGen]);
-        assert_eq!(module.optional(), [Port::Mailer, Port::RateLimiter]);
+        assert_eq!(
+            module.requires(),
+            [Port::Db, Port::Clock, Port::IdGen, Port::RateLimiter]
+        );
+        assert_eq!(module.optional(), [Port::Mailer]);
         assert_eq!(module.emits(), [email::EVENT_EMAIL_CHANGED]);
         assert_eq!(
             module.tables(),
@@ -826,7 +907,10 @@ mod tests {
                 // Issue #627: the per-organization SSO connections.
                 "sso_connections",
                 // Issue #854: the enable/disable audit trail.
-                "user_admin_audit"
+                "user_admin_audit",
+                // Issue #912: the role-change audit and the step-up transactions.
+                "step_up_transactions",
+                "user_role_audit"
             ]
         );
         assert!(!module.public_writes());
@@ -889,9 +973,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 12);
+        assert_eq!(migrations.sqlite.len(), 16);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -916,10 +1001,18 @@ mod tests {
         assert_eq!(migrations.sqlite[10].name, "email_change");
         assert_eq!(migrations.sqlite[11].id, "0012");
         assert_eq!(migrations.sqlite[11].name, "user_admin_audit");
+        assert_eq!(migrations.sqlite[12].id, "0013");
+        assert_eq!(migrations.sqlite[12].name, "step_up");
+        assert_eq!(migrations.sqlite[13].id, "0014");
+        assert_eq!(migrations.sqlite[13].name, "step_up_transactions");
+        assert_eq!(migrations.sqlite[14].id, "0015");
+        assert_eq!(migrations.sqlite[14].name, "step_up_hardening");
+        assert_eq!(migrations.sqlite[15].id, "0016");
+        assert_eq!(migrations.sqlite[15].name, "step_up_acr_in_codes");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 12);
+        assert_eq!(migrations.postgres.len(), 16);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -964,6 +1057,23 @@ mod tests {
             "the audit table is portable DDL, so Postgres reuses the sqlite file"
         );
         assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
+        // The step-up columns are portable DDL too (issue #912).
+        assert_eq!(
+            migrations.postgres[12].sql, migrations.sqlite[12].sql,
+            "the step-up columns are portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
+            migrations.postgres[13].sql, migrations.sqlite[13].sql,
+            "the step-up tables are portable DDL, so Postgres reuses the sqlite file"
+        );
+        // Postgres needs BIGINT for the millisecond column, so its form of this
+        // migration is its own file (issue #912, third review).
+        assert_ne!(migrations.postgres[14].sql, migrations.sqlite[14].sql);
+        assert!(migrations.postgres[14].sql.contains("BIGINT"));
+        assert_eq!(
+            migrations.postgres[15].sql, migrations.sqlite[15].sql,
+            "the acr move is portable DDL, so Postgres reuses the sqlite file"
+        );
         assert_eq!(
             migrations.postgres[6].sql, migrations.sqlite[6].sql,
             "the locale column is portable DDL, so Postgres reuses the sqlite file"

@@ -37,16 +37,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::store::{self, Redacted, SingleUseTokenRow, UserRow};
 use crate::{
-    LegacyHashes, ModuleState, STATUS_ACTIVE, TOKEN_EMAIL_CHANGE, consume_single_use_token,
-    cookie_value, identity_by_provider_subject, password_credential, retire_unconsumed_tokens,
+    ModuleState, STATUS_ACTIVE, TOKEN_EMAIL_CHANGE, consume_single_use_token, cookie_value,
+    identity_by_provider_subject, password_credential, retire_unconsumed_tokens,
     revoke_other_sessions, set_password_identity_email, set_primary_email,
     set_primary_email_verified, single_use_token_by_hash, user_by_id, user_by_primary_email,
-    validate, verify_password_with,
+    validate,
 };
 
 /// What a completed change announces: `user_id` and nothing else, never an
@@ -200,6 +198,9 @@ pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
 #[derive(Debug, Default, Deserialize)]
 struct ChangeBody {
     new_email: String,
+    /// The account's password, where the deployment offers no magic link and
+    /// the account has one (see [`change`]).
+    #[serde(default)]
     current_password: Option<String>,
 }
 
@@ -236,16 +237,26 @@ async fn change(
             return Err(internal(&scope));
         }
     };
-    prove_recent(
-        db,
-        clock,
-        &state,
-        &session.id,
-        &user.id,
-        body.current_password.as_deref(),
-    )
-    .await
-    .map_err(|problem| problem.instance(&scope.request_id))?;
+    // A stolen session must not be able to move the address (issue #912,
+    // second review): the change needs a passkey or email ceremony in the last
+    // two minutes, on an account whose passkeys and address have been quiet
+    // for a day. A password re-entry is no longer an alternative.
+    //
+    // Where the deployment offers no magic link, an account with a password
+    // re-proves with the password instead: an address change must stay
+    // possible for an account whose only other sign-in is a passkey it cannot
+    // reach from here (issue #912, third review).
+    let password_path = !magic_link_offered(&*state.ctx.config)
+        && matches!(store::password_credential(db, &user.id).await, Ok(Some(_)));
+    if password_path {
+        prove_password(db, &state, &user.id, body.current_password.as_deref())
+            .await
+            .map_err(|problem| problem.instance(&scope.request_id))?;
+    } else {
+        crate::authorize::require_recent_ceremony(db, clock, &session.id, &user.id)
+            .await
+            .map_err(|problem| problem.instance(&scope.request_id))?;
+    }
 
     // Everything that could distinguish the outcomes happens here, on the
     // deferred task: whether the address is free, whether a token is issued,
@@ -262,67 +273,6 @@ async fn change(
         Json(json!({ "status": "accepted", "message": ACCEPTED })),
     )
         .into_response())
-}
-
-/// Checks that this session is recent enough, or that the caller can re-prove
-/// who they are. The window is measured on the row's `created_at`, read back by
-/// id — which keeps this honest without widening the public [`crate::Session`]
-/// extractor with an age nobody else needs.
-async fn prove_recent(
-    db: &dyn Database,
-    clock: &dyn Clock,
-    state: &ModuleState,
-    session_id: &str,
-    user_id: &str,
-    current_password: Option<&str>,
-) -> Result<(), Problem> {
-    // A timestamp we cannot read is not evidence of recency, and neither is one
-    // that reads as *later* than now: a row whose clock disagreed with ours has
-    // an elapsed of a negative number of seconds, and a negative number is
-    // less than any window. The window is a range, not a half-line — the same
-    // rule `within_grace` applies to a refresh token's grace.
-    let recent = match store::session_by_id(db, session_id).await {
-        Ok(Some(row)) => OffsetDateTime::parse(&row.created_at, &Rfc3339).is_ok_and(|created| {
-            (0..RECENT_SECS).contains(&(clock.now() - created).whole_seconds())
-        }),
-        Ok(None) => false,
-        Err(err) => {
-            tracing::error!(error = %err, "could not read a session's age");
-            return Err(Problem::internal());
-        }
-    };
-    if recent {
-        return Ok(());
-    }
-    // No password to re-enter — a passkey-only or provider-only account — means
-    // recency was the whole test, and it was not met.
-    let credential = match password_credential(db, user_id).await {
-        Ok(Some(credential)) => credential,
-        Ok(None) => return Err(Problem::new(&REAUTHENTICATION_REQUIRED)),
-        Err(err) => {
-            tracing::error!(error = %err, "could not read the password credential");
-            return Err(Problem::internal());
-        }
-    };
-    let stored = credential
-        .password_hash
-        .as_ref()
-        .map_or_else(String::new, |h| h.0.clone());
-    // The deployment's legacy formats apply here for the reason they apply at
-    // login (issue #650): an imported bcrypt account that could not re-prove
-    // itself here would be locked out of its own settings.
-    let legacy = match LegacyHashes::from_config(&*state.ctx.config) {
-        Ok(legacy) => legacy,
-        Err(err) => {
-            tracing::warn!(error = %err, "auth-core: legacy-hash configuration is invalid");
-            LegacyHashes::default()
-        }
-    };
-    let proved = verify_password_with(current_password.unwrap_or_default(), &stored, legacy);
-    if !proved {
-        return Err(Problem::new(&REAUTHENTICATION_REQUIRED));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +361,10 @@ async fn confirm(
     }
     if let Err(err) = set_primary_email_verified(db, &user.id, &now).await {
         tracing::error!(error = %err, "could not record the new address as verified");
+        return Err(internal(&scope));
+    }
+    if let Err(err) = crate::authorize::record_security_change(db, clock, &user.id).await {
+        tracing::error!(error = %err, "could not record the address change");
         return Err(internal(&scope));
     }
 
@@ -736,6 +690,107 @@ fn send_mail(
     })
 }
 
+/// Whether this deployment offers the magic-link sign-in. Its email ceremony is
+/// how an account with a passkey changes its address (issue #912, third review).
+fn magic_link_offered(cfg: &dyn cratefield_core::Config) -> bool {
+    cratefield_core::ModuleConfig::new("auth-core", cfg)
+        .get_opt(crate::authorize::LOGIN_METHODS_KEY)
+        .is_some_and(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .any(|slug| slug == "magic-link")
+        })
+}
+
+/// Re-proves the caller with the account's password, for an address change in
+/// a deployment without a magic link.
+async fn prove_password(
+    db: &dyn Database,
+    state: &ModuleState,
+    user_id: &str,
+    current_password: Option<&str>,
+) -> Result<(), Problem> {
+    let credential = match store::password_credential(db, user_id).await {
+        Ok(Some(credential)) => credential,
+        Ok(None) => return Err(Problem::new(&REAUTHENTICATION_REQUIRED)),
+        Err(err) => {
+            tracing::error!(error = %err, "could not read the password credential");
+            return Err(Problem::internal());
+        }
+    };
+    let stored = credential
+        .password_hash
+        .as_ref()
+        .map_or_else(String::new, |h| h.0.clone());
+    // The legacy formats apply here for the reason they apply at login (issue
+    // #650): an imported bcrypt account must not be locked out of its settings.
+    let legacy = match crate::secrets::LegacyHashes::from_config(&*state.ctx.config) {
+        Ok(legacy) => legacy,
+        Err(err) => {
+            tracing::warn!(error = %err, "auth-core: legacy-hash configuration is invalid");
+            crate::secrets::LegacyHashes::default()
+        }
+    };
+    if crate::secrets::verify_password_with(current_password.unwrap_or_default(), &stored, legacy) {
+        Ok(())
+    } else {
+        Err(Problem::new(&REAUTHENTICATION_REQUIRED))
+    }
+}
+
+/// Tells the account's address that a passkey was added or removed (issue
+/// #912, second review). Every passkey change is announced, whichever session
+/// made it. A deployment that cannot mail, or an account with no address,
+/// sends nothing and says so in the log.
+pub async fn notify_passkey_change(ctx: &ModuleContext, user_id: &str, what: &str) {
+    let (Some(db), Some(clock), Some(mailer)) = (
+        ctx.ports.db.as_deref(),
+        ctx.ports.clock.as_deref(),
+        ctx.ports.mailer.as_deref(),
+    ) else {
+        return;
+    };
+    let settings = MailSettings::from_config(&*ctx.config);
+    let Some((_, mail_from)) = settings.mail_ready() else {
+        tracing::warn!("no PUBLIC_BASE/MAIL_FROM configured; no passkey-change notice was sent");
+        return;
+    };
+    let Ok(Some(user)) = store::user_by_id(db, user_id).await else {
+        return;
+    };
+    // An account with no address (sign-up without email, issue #914) has nobody
+    // to mail. The change still stands, and the log records that no notice went
+    // out. An in-app notice record is the follow-up for these accounts.
+    let Some(address) = user
+        .primary_email
+        .clone()
+        .filter(|address| !address.is_empty())
+    else {
+        tracing::info!(
+            subject_hash = %cratefield_core::subject_hash(user_id),
+            change = what,
+            "an account with no address changed its passkeys; no notice was mailed"
+        );
+        return;
+    };
+    let brand = crate::Brand::from_config(&*ctx.config, &ctx.venture);
+    let locale = user.locale.clone().unwrap_or_else(|| "en".to_owned());
+    let now = crate::sessions::iso(clock.now());
+    mail(
+        ctx,
+        mailer,
+        &SECURITY_DEFAULT,
+        &SecurityMail {
+            venture: brand.name,
+            what: what.to_owned(),
+            contact: brand.support_email.unwrap_or_default(),
+        },
+        (&locale, &address, mail_from),
+        &format!("security-notice-{user_id}-{now}-{what}"),
+    )
+    .await;
+}
+
 /// Renders one message through the venture's registry and sends it, logging
 /// rather than propagating every failure — here a failure means no mail, never
 /// a different answer to the caller who is already waiting.
@@ -895,16 +950,38 @@ pub struct NoticeMail {
 pub(crate) struct EmailChangeTemplate {
     id: &'static str,
     notice: bool,
+    /// A notice that a passkey was added or removed (issue #912, second review).
+    security: bool,
 }
 
 pub(crate) const CONFIRM_DEFAULT: EmailChangeTemplate = EmailChangeTemplate {
     id: TEMPLATE_EMAIL_CHANGE_CONFIRM,
     notice: false,
+    security: false,
 };
 pub(crate) const NOTICE_DEFAULT: EmailChangeTemplate = EmailChangeTemplate {
     id: TEMPLATE_EMAIL_CHANGE_NOTICE,
     notice: true,
+    security: false,
 };
+pub(crate) const SECURITY_DEFAULT: EmailChangeTemplate = EmailChangeTemplate {
+    id: TEMPLATE_SECURITY_NOTICE,
+    notice: false,
+    security: true,
+};
+
+/// The template a passkey added or removed is announced with.
+pub const TEMPLATE_SECURITY_NOTICE: &str = "auth-core/security-notice";
+
+/// What the security notice template is given.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SecurityMail {
+    pub venture: String,
+    /// What happened, in a few words: `added` or `removed`.
+    pub what: String,
+    /// Where to write, when the deployment configured a support address.
+    pub contact: String,
+}
 
 impl Template for EmailChangeTemplate {
     fn render(&self, data: &Value, _locale: &str) -> Result<Rendered, TemplateError> {
@@ -917,7 +994,36 @@ impl Template for EmailChangeTemplate {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let venture = theme.name_or(declared);
-        let message = if self.notice {
+        let message = if self.security {
+            let data: SecurityMail = parse(self.id, data)?;
+            let way_out = if data.contact.is_empty() {
+                format!(
+                    "If you do not recognise this, sign in to {venture} and review the passkeys \
+                     on your account, or ask whoever administers this service to help."
+                )
+            } else {
+                format!(
+                    "If you do not recognise this, write to {} and we will look into it.",
+                    data.contact
+                )
+            };
+            Message::new(
+                format!("A passkey was {} on your {venture} account", data.what),
+                format!("A passkey was {} on your {venture} account", data.what),
+            )
+            .preheader("The sign-in settings on your account changed.")
+            .paragraph(format!(
+                "A passkey was {} on your {venture} account. Passkeys and your address cannot \
+                     be changed without a fresh sign-in, and this notice is sent so that you \
+                     hear about it whatever the reason.",
+                data.what
+            ))
+            .note(way_out)
+            .why(format!(
+                "a passkey on your {venture} account was {}",
+                data.what
+            ))
+        } else if self.notice {
             let data: NoticeMail = parse(self.id, data)?;
             let way_out = if data.contact.is_empty() {
                 format!(
@@ -990,7 +1096,7 @@ fn parse<T: serde::de::DeserializeOwned>(id: &str, data: &Value) -> Result<T, Te
 /// the same ids a venture registers to reword them.
 #[must_use]
 pub fn default_templates() -> Vec<(String, Box<dyn Template>)> {
-    [CONFIRM_DEFAULT, NOTICE_DEFAULT]
+    [CONFIRM_DEFAULT, NOTICE_DEFAULT, SECURITY_DEFAULT]
         .into_iter()
         .map(|template| (template.id.to_owned(), Box::new(template) as _))
         .collect()

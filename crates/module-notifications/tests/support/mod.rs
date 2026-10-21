@@ -110,7 +110,7 @@ pub fn token_for_verified_email(sub: &str, email: &str) -> String {
 /// A token with arbitrary claims, for the refusals.
 pub fn token_with(claims: &Value) -> String {
     let (signing, _) = signing_key();
-    let header = json!({ "alg": "ES256", "kid": "test-key-1", "typ": "JWT" });
+    let header = json!({ "alg": "ES256", "kid": "test-key-1", "typ": "at+jwt" });
     let input = format!(
         "{}.{}",
         b64(serde_json::to_string(&header).expect("header").as_bytes()),

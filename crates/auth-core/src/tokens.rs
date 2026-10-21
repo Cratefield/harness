@@ -316,10 +316,13 @@ impl SigningKeys {
             "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["ES256"],
+            "prompt_values_supported": ["none", "login", "consent", "select_account"],
             "claims_supported": [
                 "iss", "sub", "aud", "exp", "iat", "sid",
-                "email", "email_verified", "amr", "sso_connection"
+                "email", "email_verified", "amr", "sso_connection",
+                "auth_time", "nonce", "roles", "azp", "sid"
             ],
+            "scopes_supported": ["openid"],
         })
     }
 }
@@ -346,6 +349,47 @@ struct AccessClaims<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     sso_connection: Option<&'a str>,
     amr: &'a [String],
+    /// When the person last authenticated in a real ceremony (issue #912):
+    /// the session's creation, never a refresh. Epoch seconds, OIDC Core
+    /// section 2.
+    auth_time: i64,
+    /// The account's roles, present only for a client registered to receive
+    /// them (issue #912).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roles: Option<&'a [String]>,
+    /// The authentication context, present when the session spent a step-up
+    /// transaction (issue #912).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acr: Option<&'a str>,
+}
+
+/// The serialized ID-token claims (OpenID Connect Core section 2). The
+/// subject, audience and the authentication facts only: `nonce` is echoed
+/// from the authorization request when one was sent.
+#[derive(Serialize)]
+struct IdClaims<'a> {
+    iss: &'a str,
+    sub: &'a str,
+    aud: &'a str,
+    /// The authorized party: the client the token was issued to (OpenID
+    /// Connect Core section 2). With one audience it equals `aud`.
+    azp: &'a str,
+    exp: i64,
+    iat: i64,
+    /// The session behind the authentication, as the access token names it.
+    sid: &'a str,
+    auth_time: i64,
+    amr: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email_verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roles: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acr: Option<&'a str>,
 }
 
 fn b64url(bytes: &[u8]) -> String {
@@ -359,10 +403,38 @@ fn iso(t: OffsetDateTime) -> String {
         .expect("rfc3339 formats")
 }
 
+/// Signs one JWT: `typ` in the header, `kid` of the active key, ES256
+/// over the signing input.
+fn sign_jwt(keys: &SigningKeys, typ: &str, claims: &impl Serialize) -> String {
+    let header = json!({
+        "alg": "ES256",
+        "typ": typ,
+        "kid": keys.active_kid(),
+    });
+    let signing_input = format!(
+        "{}.{}",
+        b64url(
+            serde_json::to_string(&header)
+                .expect("header serializes")
+                .as_bytes()
+        ),
+        b64url(
+            serde_json::to_string(claims)
+                .expect("claims serialize")
+                .as_bytes()
+        ),
+    );
+    let active = keys.active();
+    let signature: ecdsa::Signature = active.signing.sign(signing_input.as_bytes());
+    format!("{signing_input}.{}", b64url(&signature.to_bytes()))
+}
+
 /// Mints one ES256 access token (RFC 9068 shape: `typ: at+jwt`,
 /// `kid` in the header) for one session and client: `sub` the user
 /// id, `aud` the client id, `sid` the session id, `exp`/`iat` from
-/// the `Clock` port, `amr` the session's login methods.
+/// the `Clock` port, `amr` the session's login methods, `auth_time` the
+/// session's last real authentication, and `roles` only when the caller
+/// passes them (the client asked for the claim).
 ///
 /// `sso_connection` is the connection id to name in the token, already
 /// resolved by the caller to "the session's connection, and only while it
@@ -380,9 +452,8 @@ fn iso(t: OffsetDateTime) -> String {
 /// Never in practice: the documented panics are the `time` crate's
 /// nanosecond truncation and RFC 3339 formatting, both infallible on
 /// this path.
-// The eight arguments are the eight things an RFC 9068 token says; bundling
-// them into a struct would only move the list somewhere the claims are read
-// from, and `sso_connection` adding the eighth is what issue #627 is.
+// The arguments are the things an RFC 9068 token says; bundling them into a
+// struct would only move the list somewhere the claims are read from.
 #[allow(clippy::too_many_arguments)]
 pub fn mint_access_token(
     keys: &SigningKeys,
@@ -393,6 +464,9 @@ pub fn mint_access_token(
     client_id: &str,
     sso_connection: Option<&str>,
     amr: &[String],
+    auth_time: i64,
+    roles: Option<&[String]>,
+    acr: Option<&str>,
 ) -> Result<String, TokenError> {
     let now = clock.now().replace_nanosecond(0).expect("in range");
     let claims = AccessClaims {
@@ -406,28 +480,58 @@ pub fn mint_access_token(
         email_verified: user_email.map(|(_, verified)| verified),
         sso_connection,
         amr,
+        auth_time,
+        roles,
+        acr,
     };
-    let header = json!({
-        "alg": "ES256",
-        "typ": "at+jwt",
-        "kid": keys.active_kid(),
-    });
-    let signing_input = format!(
-        "{}.{}",
-        b64url(
-            serde_json::to_string(&header)
-                .expect("header serializes")
-                .as_bytes()
-        ),
-        b64url(
-            serde_json::to_string(&claims)
-                .expect("claims serialize")
-                .as_bytes()
-        ),
-    );
-    let active = keys.active();
-    let signature: ecdsa::Signature = active.signing.sign(signing_input.as_bytes());
-    Ok(format!("{signing_input}.{}", b64url(&signature.to_bytes())))
+    Ok(sign_jwt(keys, "at+jwt", &claims))
+}
+
+/// Mints one ES256 ID token (OpenID Connect Core section 2) for one
+/// authentication: `aud` the client id, `auth_time` and `amr` the
+/// session's, `nonce` echoed from the request when one was sent, and
+/// `roles` only when the client asked for them.
+///
+/// # Errors
+///
+/// [`TokenError::Unconfigured`] never once keys are resolved; the
+/// signature is deterministic (RFC 6979).
+///
+/// # Panics
+///
+/// Never in practice, for the same reason as [`mint_access_token`].
+#[allow(clippy::too_many_arguments)]
+pub fn mint_id_token(
+    keys: &SigningKeys,
+    clock: &dyn Clock,
+    user_id: &str,
+    user_email: Option<(&str, bool)>,
+    client_id: &str,
+    auth_time: i64,
+    amr: &[String],
+    nonce: Option<&str>,
+    roles: Option<&[String]>,
+    session_id: &str,
+    acr: Option<&str>,
+) -> Result<String, TokenError> {
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let claims = IdClaims {
+        iss: &keys.issuer,
+        sub: user_id,
+        aud: client_id,
+        azp: client_id,
+        exp: now.unix_timestamp() + ACCESS_TOKEN_SECS,
+        iat: now.unix_timestamp(),
+        sid: session_id,
+        auth_time,
+        amr,
+        nonce,
+        email: user_email.map(|(email, _)| email),
+        email_verified: user_email.map(|(_, verified)| verified),
+        roles,
+        acr,
+    };
+    Ok(sign_jwt(keys, "JWT", &claims))
 }
 
 /// 32 random bytes, base64url — the shape of every opaque token value
@@ -1068,6 +1172,9 @@ mod tests {
             "client_1",
             None,
             &amr,
+            1_800_000_000,
+            None,
+            None,
         )
         .expect("mint");
 
@@ -1118,6 +1225,9 @@ mod tests {
             "client_1",
             Some("ssoc_1"),
             &["sso".to_owned()],
+            1_800_000_000,
+            None,
+            None,
         )
         .expect("mint");
         let sso_claims = sso.split('.').nth(1).expect("claims");
@@ -1137,6 +1247,9 @@ mod tests {
             "client_1",
             None,
             &[],
+            1_800_000_000,
+            None,
+            None,
         )
         .expect("mint");
         let bare_claims = bare.split('.').nth(1).expect("claims");
