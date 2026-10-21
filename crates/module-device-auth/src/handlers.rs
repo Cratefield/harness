@@ -199,8 +199,11 @@ fn internal(scope: &Scope) -> Problem {
     Problem::internal().instance(&scope.request_id)
 }
 
-fn see_other(location: String) -> Response {
-    (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
+fn see_other(location: &str) -> Response {
+    match HeaderValue::from_str(location) {
+        Ok(value) => (StatusCode::SEE_OTHER, [(header::LOCATION, value)]).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// A `200 text/html` body.
@@ -835,7 +838,7 @@ async fn page(
     let target = return_to(&uri);
     let subject = match approver.approve(&headers, &target).await {
         Ok(Approval::Subject(subject)) => subject,
-        Ok(Approval::SignIn { location }) => return Ok(see_other(location)),
+        Ok(Approval::SignIn { location }) => return Ok(see_other(&location)),
         Err(err) => {
             tracing::error!(error = %err, "the approver could not identify the caller");
             return Err(Problem::internal());
@@ -989,7 +992,7 @@ async fn decide(
     let target = return_to(uri);
     let subject = match approver.approve(headers, &target).await {
         Ok(Approval::Subject(subject)) => subject,
-        Ok(Approval::SignIn { location }) => return Ok(see_other(location)),
+        Ok(Approval::SignIn { location }) => return Ok(see_other(&location)),
         Err(err) => {
             tracing::error!(error = %err, "the approver could not identify the caller");
             return Err(Problem::new(&APPROVER_REQUIRED).instance(&scope.request_id));

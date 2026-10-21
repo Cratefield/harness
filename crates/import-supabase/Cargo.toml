@@ -5,7 +5,7 @@ readme = "README.md"
 keywords = ["cratefield", "supabase", "postgres", "migration", "import"]
 categories = ["database", "command-line-utilities"]
 include = ["src/**/*", "README.md"]
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -46,7 +46,7 @@ url = { workspace = true, features = ["std"] }
 sqlx = { version = "0.8.6", default-features = false, features = [
     "postgres",
     "runtime-tokio",
-    "tls-rustls",
+    "tls-rustls-ring-native-roots",
 ] }
 
 [dev-dependencies]

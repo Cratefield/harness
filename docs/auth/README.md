@@ -167,7 +167,7 @@ instance per app. `instances/alphahunt`, `instances/yoginini` and
 `auth-staging.yoginini.us`, `auth-staging.keepshipping.run`);
 `instances/findsyou` (`auth.findsyou.work`) has both D1s provisioned and
 goes to production first, for the live FindsYou app; `instances/earthos`
-(`auth.earthos.world`, Earth.OS account) has both D1s provisioned too;
+(`auth.earthos.world`, Earth.OS account) has both D1s provisioned too; `instances/factory0` (Factory Zero, Factory0 account) has its staging D1 provisioned and is not deployed;
 their production deploys and `instances/cratefield` wait on the steps in
 [MANAGED-INSTANCES.md](MANAGED-INSTANCES.md) (secrets, Owlpost, Turnstile,
 first `auth-v*` tag). Per-organization enterprise SSO over OpenID

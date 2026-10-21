@@ -123,7 +123,12 @@ fn no_column_can_hold_a_login_secret_in_the_clear() {
     assert!(!sqls.is_empty());
     for sql in &sqls {
         let columns = columns(sql);
-        assert!(!columns.is_empty(), "parsed the columns of {sql:?}");
+        // A migration that only drops a column (issue #912, third review) adds
+        // none to scan.
+        assert!(
+            !columns.is_empty() || sql.to_ascii_uppercase().contains("DROP COLUMN"),
+            "parsed the columns of {sql:?}"
+        );
 
         for (table, column) in &columns {
             assert!(

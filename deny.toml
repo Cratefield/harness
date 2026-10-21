@@ -102,7 +102,8 @@ allow = [
     "Unicode-DFS-2016",
     # foldhash (transitive via hashbrown/rusqlite) — OSI approved.
     "Zlib",
-    # webpki-roots (transitive via sqlx tls-rustls, issue #18) — Mozilla's
+    # webpki-roots (transitive via reqwest, the native runtime HTTP client,
+    # issue #18; sqlx uses the OS trust store since the RUSTSEC-2026-0381 fix) — Mozilla's
     # CDLA-Permissive-2.0 root store: permissive, attribution-only.
     "CDLA-Permissive-2.0",
     # xxhash-rust (transitive via the redis crate's digest support, issue
