@@ -46,8 +46,8 @@ cratefield-signer = { path = "crates/signer", version = "0.1" }
 # The signer port's Turnkey provider (issue #761): passkey-rooted
 # sub-organizations, delegated access under policy, key-reference signing.
 cratefield-adapter-turnkey = { path = "crates/adapter-turnkey", version = "0.1.2" }
-cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.5.1" }
-cratefield-runtime-native = { path = "crates/runtime-native", version = "0.4.5" }
+cratefield-runtime-cloudflare = { path = "crates/runtime-cloudflare", version = "0.5.2" }
+cratefield-runtime-native = { path = "crates/runtime-native", version = "0.4.6" }
 cratefield-runtime-browser = { path = "crates/runtime-browser", version = "0.1.0" }
 cratefield-adapter-resend = { path = "crates/adapter-resend", version = "0.4.3" }
 # The second mail provider (issue #591): the `Mailer` port over the
@@ -137,10 +137,10 @@ cratefield-module-changelog = { path = "crates/module-changelog", version = "0.3
 cratefield-module-owlpost = { path = "crates/module-owlpost", version = "0.1.3" }
 # Telegram in the harness (issue #764): the secret-token webhook, account
 # linking, consent buttons that never move value without a passkey.
-cratefield-module-telegram = { path = "crates/module-telegram", version = "0.1.3" }
+cratefield-module-telegram = { path = "crates/module-telegram", version = "0.1.4" }
 # The notifications module is the first to depend on the auth client, because
 # the account a route acts for comes from the auth extractor (ADR 0016).
-cratefield-module-notifications = { path = "crates/module-notifications", version = "0.3.4" }
+cratefield-module-notifications = { path = "crates/module-notifications", version = "0.3.5" }
 # Aggregate usage telemetry (issue #413): counted events behind a closed
 # grammar, with the consent model built into the crate.
 cratefield-module-telemetry = { path = "crates/module-telemetry", version = "0.3.2" }
@@ -167,7 +167,7 @@ cratefield-module-sealed = { path = "crates/module-sealed", version = "0.1.2" } 
 # path-only dependency has no version, and `cargo publish` refuses a
 # dependency without one. It was invisible while both crates were
 # `publish = false`.
-cratefield-auth-client = { path = "crates/auth-client", version = "0.3.5" }
+cratefield-auth-client = { path = "crates/auth-client", version = "0.4.0" }
 # OAuth 2.0 once, over the `HttpClient` port (issue #531): authorize URLs,
 # code exchange, refresh, revocation, PKCE, and the token sealer
 # `fz-module-linkedin` stores its sealed blobs under.
