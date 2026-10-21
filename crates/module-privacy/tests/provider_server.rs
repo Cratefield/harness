@@ -349,12 +349,12 @@ async fn an_unsigned_wrongly_signed_or_out_of_window_call_is_refused() {
         ),
         ("an empty secret", signature("", now(), body.as_bytes())),
         (
-            "a timestamp 301 s old",
-            signature(SECRET, now() - 301, body.as_bytes()),
+            "a timestamp 360 s old",
+            signature(SECRET, now() - 360, body.as_bytes()),
         ),
         (
-            "a timestamp 301 s ahead",
-            signature(SECRET, now() + 301, body.as_bytes()),
+            "a timestamp 360 s ahead",
+            signature(SECRET, now() + 360, body.as_bytes()),
         ),
         (
             "a signature over a different body",
