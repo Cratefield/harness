@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cratefield-adapter-anthropic",
  "cratefield-adapter-apns",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-postgres"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-auth-client"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-import-supabase"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-connections"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -1933,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-device-auth"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-guardrails"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-notifications"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -2078,7 +2078,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-owlpost"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "cratefield-adapter-owlpost",
@@ -2140,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-module-telegram"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -2260,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-oauth-client"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-cloudflare"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2404,7 +2404,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-runtime-native"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-testing"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "async-trait",
  "axum",
