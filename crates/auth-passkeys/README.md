@@ -16,6 +16,11 @@ Passkey registration and login for the auth service
 | `GET /passkeys/prf` | required | The account's passkeys with what each ceremony has shown about PRF support, and the salt each one evaluates with |
 | `GET /add?return_to=<url>` | optional | The hosted "Add a passkey" page. Signed out, it offers the sign-in links and comes back here; signed in, it runs the registration ceremony (asking for PRF) and returns to `return_to` with `#cf_passkey=<credential id>&cf_aaguid=<uuid>&cf_prf=1\|0` — or `#cf_passkey_error=cancelled` from its "Not now" link. `return_to` must be an `https` URL on the origin of an active client's registered redirect URI; anything else is dropped, never redirected to |
 
+`GET /offer?continue=<authorize request>`, `GET /offer/skip?continue=…`
+and `POST /offer/dismiss` (form: `continue`) are the passkey offer after a
+sign-in, described below. `continue` must be a path under
+`/v1/auth-core/authorize`; anything else is a `400` page, never a redirect.
+
 `POST /login/verify` refuses a cross-site request — `403`,
 `auth/cross-site-request`, ahead of the rate limiter. A verified
 assertion issues a session, and `SameSite=Lax` stops a cross-site POST
@@ -30,6 +35,43 @@ from *carrying* our session cookie, not from *setting* one (issue #439).
 | `AUTH_PASSKEYS_RP_NAME` | no | `AUTH_BRAND_NAME`, else the RP id |
 | `AUTH_PASSKEYS_CHALLENGE_TTL_SECS` | no | `300`, bounded to 60..900 |
 | `AUTH_PASSKEYS_USER_VERIFICATION` | no | `preferred` |
+| `AUTH_PASSKEYS_OFFER_AFTER_SIGNIN` | no | `false`. `true` offers a passkey after a sign-in by magic link or password (see below) |
+| `AUTH_PASSKEYS_OFFER_SNOOZE_DAYS` | no | `30`, 1 to 365. How long a "Not now" keeps the offer off |
+
+## The passkey offer after a sign-in
+
+With `AUTH_PASSKEYS_OFFER_AFTER_SIGNIN = "true"`, a person who has just
+signed in by magic link or password, and who has **no passkey**, is shown
+"Sign in faster next time" before the app gets its code. It is offered only
+for a sign-in that is really a sign-in:
+
+- the session was created at most two minutes ago (the window the first
+  passkey's enrolment gate accepts, so "Add a passkey" works on that page);
+- the request is not a step-up (`prompt=login`, `max_age`, or a step-up
+  transaction), and not silent (`prompt=none`), and the client wants a page;
+- the sign-in was not itself a passkey;
+- the account has no passkey, and has not chosen "Not now" inside
+  `AUTH_PASSKEYS_OFFER_SNOOZE_DAYS`.
+
+"Add a passkey" runs the same ceremony as the add page (the shared script in
+`src/ceremony.rs`) against the same enrolment gate; nothing about the gate is
+relaxed. "Not now" posts a dismissal, kept per account in
+`auth_passkeys_offer_dismissals` so it follows the person across browsers,
+and records a low-severity in-app notice (no mail). After either, the browser
+returns to the `continue` URL, which is the original `/authorize` request,
+unchanged: the same `state`, PKCE challenge and `redirect_uri`.
+
+A browser that cannot offer a passkey (no WebAuthn) is sent on at once, and
+"Continue without a passkey" goes the same way, both through
+`GET /offer/skip`. That sets `__Host-sign-in-step=<session id>` (ten minutes,
+`HttpOnly`, `Secure`, `SameSite=Lax`), and `/authorize` passes a request
+carrying it for that session straight through. Without the marker the
+offer would send the browser back to itself. Nothing is recorded against the
+account for a skip, so the next sign-in is offered again.
+
+The decision lives in `auth-core` (`SignInStep`, attached to `AuthCore` with
+`AuthCore::sign_in_step`). The worker attaches it; a composition that wants
+the offer must attach `Passkeys::sign_in_step()` the same way.
 
 Every origin must be the RP id or a subdomain of it. That is WebAuthn's own
 rule, checked at configuration time because an origin outside it could never
@@ -38,12 +80,14 @@ wrong.
 
 ## What this module owns in the database
 
-Two tables. The challenge budget behind `login/options`
+Three tables. The challenge budget behind `login/options`
 (`auth_passkeys_challenge_budget`, migration `0001` here) — the issuance
 cap that keeps the public endpoint from being swept for accounts whether or
 not a rate limiter is wired up — and one PRF row per passkey
 (`auth_passkeys_prf`, migration `0002` here): its salt and what the
-ceremonies so far have shown about its PRF support. Everything else belongs
+ceremonies so far have shown about its PRF support, and the passkey offer's
+"Not now" ledger (`auth_passkeys_offer_dismissals`, migration `0003` here: one
+row per account, the instant it declined). Everything else belongs
 to `auth-core`, which owns `users`, `credentials`, `sessions` and
 `single_use_tokens`, and publishes the typed store API this module writes
 through, so that schema has one definition and one migration history. The

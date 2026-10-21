@@ -106,6 +106,8 @@ sending domain).
 | `AUTH_PROBLEM_BASE` | Overrides the problem-type base (default `<AUTH_PUBLIC_URL>/problems/`, issue #557) |
 | `AUTH_CORE_ISSUER` | Must equal `AUTH_PUBLIC_URL` when set |
 | `AUTH_CORE_*`, `AUTH_OIDC_*`, `AUTH_PASSKEYS_*`, `AUTH_PASSWORD_*`, `AUTH_MAGIC_LINK_*`, `AUTH_META_*` | Each module's own keys; see its README |
+| `AUTH_PASSKEYS_OFFER_AFTER_SIGNIN` | `true` offers a passkey after a magic-link or password sign-in to an account with none. Default `false`. See `crates/auth-passkeys/README.md` |
+| `AUTH_PASSKEYS_OFFER_SNOOZE_DAYS` | How long a "Not now" keeps the offer off. Default `30`, 1 to 365 |
 
 Secrets every instance needs: `HARNESS_SECRET` (and
 `HARNESS_SECRET_PREVIOUS` during rotation), the token signing keys (`AUTH_CORE_SIGNING_KEYS`, with `AUTH_CORE_SIGNING_KEY_ACTIVE` naming the active one), the mail

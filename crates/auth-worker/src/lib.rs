@@ -110,15 +110,19 @@ impl AuthWorker {
     /// variable and reads it at request time.
     #[must_use]
     pub fn builder(self) -> HarnessBuilder {
+        // The passkey offer after a sign-in is a step `/authorize` consults,
+        // so the passkeys module is attached to auth-core here. It stays off
+        // unless `AUTH_PASSKEYS_OFFER_AFTER_SIGNIN` is `true`.
+        let passkeys = Passkeys::new();
         let mut builder = Harness::builder()
             .venture(self.config.venture())
             // Magic-link and password render their mail through the
             // shared registry.
             .templates(auth_magic_link::default_templates())
             .templates(auth_password::default_templates())
-            .module(AuthCore::new())
+            .module(AuthCore::new().sign_in_step(passkeys.sign_in_step()))
             .module(Oidc::new())
-            .module(Passkeys::new())
+            .module(passkeys)
             .module(MagicLink::new())
             .module(Password::new())
             .module(Meta::new());

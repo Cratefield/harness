@@ -28,6 +28,7 @@ mod authorize;
 /// support address, footer and legal links, shared by every auth module.
 pub mod brand;
 pub use brand::Brand;
+pub use sign_in_step::{MARKER_COOKIE, SignIn, SignInStep};
 // The two items a venture author needs from the chooser: the config key
 // and the slugs it accepts. They were `pub` inside this private module,
 // which meant nothing outside the crate could name either — the README
@@ -67,6 +68,7 @@ mod locale;
 pub mod page;
 mod secrets;
 mod sessions;
+mod sign_in_step;
 mod sso;
 mod store;
 mod token_endpoint;
@@ -375,6 +377,8 @@ pub(crate) struct ModuleState {
     /// (issue #648). Empty when unset, which with no `mail_from` is what
     /// says "this deployment sends no email-change mail".
     pub(crate) mail: email::MailSettings,
+    /// The post-sign-in step, if the composition attached one.
+    pub(crate) sign_in_step: Option<Arc<dyn SignInStep>>,
 }
 
 /// The auth-core module: schema, clients, sessions, tokens, the
@@ -392,6 +396,11 @@ pub struct AuthCore {
     /// which does see the config — before any request can flow, and
     /// the discovery handlers read it per request.
     signing: tokens::SigningKeysCell,
+    /// The step a just-signed-in browser may be sent through before its
+    /// code is minted (see [`SignInStep`]). `None` by default: a
+    /// composition that wants one attaches it with
+    /// [`AuthCore::sign_in_step`].
+    sign_in_step: Option<std::sync::Arc<dyn SignInStep>>,
 }
 
 impl Default for AuthCore {
@@ -406,7 +415,17 @@ impl AuthCore {
         Self {
             secret_overlap_secs: DEFAULT_SECRET_OVERLAP_SECS,
             signing: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            sign_in_step: None,
         }
+    }
+
+    /// Attaches the step a just-signed-in browser may be sent through
+    /// before its code is minted. The passkey offer is one; see
+    /// [`SignInStep`] for when it is asked.
+    #[must_use]
+    pub fn sign_in_step(mut self, step: std::sync::Arc<dyn SignInStep>) -> Self {
+        self.sign_in_step = Some(step);
+        self
     }
 
     /// How long the previous client secret keeps verifying after a
@@ -913,6 +932,7 @@ impl Module for AuthCore {
             ctx: Arc::new(ctx),
             tokens: Arc::clone(&self.signing),
             mail,
+            sign_in_step: self.sign_in_step.clone(),
         });
         account::router()
             .with_state(Arc::clone(&state))
