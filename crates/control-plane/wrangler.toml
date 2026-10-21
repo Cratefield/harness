@@ -43,7 +43,7 @@ crons = ["41 2 * * *"]
 # production declares its own, with its own namespace id.
 [[ratelimits]]
 name = "RATE_LIMITER"
-namespace_id = "2001"
+namespace_id = "3700"
 
 [ratelimits.simple]
 limit = 30

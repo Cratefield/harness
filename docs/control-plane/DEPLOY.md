@@ -198,3 +198,8 @@ locally, put `ENV=production`, a `HARNESS_SECRET` and
 `CONSOLE_BASE_URL=http://127.0.0.1:8787` in `.dev.vars` (git-ignored), then
 `wrangler d1 migrations apply DB --local && wrangler dev --local` and run
 `./smoke.sh http://127.0.0.1:8787`.
+
+
+## Rate-limit namespace ids (account-wide)
+
+Cloudflare Workers rate-limit `namespace_id`s are account-wide, not per Worker: any two Workers (or environments) on the same Cloudflare account that use the same id share counters. Cratefield control-plane owns the block **3700-3709**; its ids are top-level (non-deployed) 3700; `env.production` stays on 2002. Pick new ids from an unused number inside this block and check the other ventures' wrangler configs before adding one.
