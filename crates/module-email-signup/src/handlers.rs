@@ -103,22 +103,34 @@ pub(crate) fn router(ctx: Arc<ModuleContext>, settings: Settings) -> axum::Route
 }
 
 pub(crate) fn now_iso() -> String {
-    SystemClock
+    match SystemClock
         .now()
         .replace_nanosecond(0)
         .expect("truncation stays in range")
         .format(&Rfc3339)
-        .unwrap_or_default()
+    {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(error = %err, "failed to format current timestamp to RFC3339");
+            "1970-01-01T00:00:00Z".to_owned()
+        }
+    }
 }
 
 pub(crate) fn iso_ago(secs: i64) -> String {
-    SystemClock
+    match SystemClock
         .now()
         .replace_nanosecond(0)
         .expect("truncation stays in range")
         .saturating_sub(time::Duration::seconds(secs))
         .format(&Rfc3339)
-        .unwrap_or_default()
+    {
+        Ok(s) => s,
+        Err(err) => {
+            tracing::error!(error = %err, "failed to format past timestamp to RFC3339");
+            "1970-01-01T00:00:00Z".to_owned()
+        }
+    }
 }
 
 fn unix_now() -> u64 {

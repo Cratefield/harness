@@ -17,6 +17,7 @@ use cratefield_core::{Database, DbError, Row, Rows, SqlMigration, Statement};
 use rusqlite::types::Value as SqliteValue;
 use rusqlite::{Connection, OptionalExtension};
 use sea_query::Value as SeaValue;
+use tracing;
 // Connection guarding (see module docs) — not request state.
 #[allow(clippy::disallowed_types)]
 type Guarded<T> = std::sync::Mutex<T>;
@@ -46,7 +47,13 @@ fn sea_to_sqlite(value: &SeaValue) -> SqliteValue {
         SeaValue::SmallUnsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
         SeaValue::Unsigned(v) => v.map_or(null, |v| SqliteValue::Integer(i64::from(v))),
         SeaValue::BigUnsigned(v) => v.map_or(null, |v| {
-            SqliteValue::Integer(i64::try_from(v).unwrap_or(i64::MAX))
+            match i64::try_from(v) {
+                Ok(i) => SqliteValue::Integer(i),
+                Err(_) => {
+                    tracing::error!("BigUnsigned overflow: {} exceeds i64::MAX", v);
+                    SqliteValue::Integer(i64::MAX)
+                }
+            }
         }),
         SeaValue::Float(v) => v.map_or(null, |v| SqliteValue::Real(f64::from(v))),
         SeaValue::Double(v) => v.map_or(null, SqliteValue::Real),
