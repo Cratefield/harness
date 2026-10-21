@@ -327,7 +327,7 @@ async fn verify(
 /// The challenge the authenticator actually signed, read back out of the
 /// client data. Verification checks it against the stored one; this only
 /// finds the row.
-fn challenge_from_client_data(raw: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn challenge_from_client_data(raw: &[u8]) -> Option<Vec<u8>> {
     let parsed: webauthn_rs_proto::CollectedClientData = serde_json::from_slice(raw).ok()?;
     Some(parsed.challenge.as_slice().to_vec())
 }
@@ -375,7 +375,9 @@ async fn enrolment_gate(
             .await
             .map_err(|problem| problem.instance(&scope.request_id))?;
     } else {
-        cratefield_auth_core::require_recent_ceremony(db, clock, &session.id, &session.user_id)
+        // A recovery sign-in may enrol a passkey (issue #914); anything else
+        // needs a passkey or email ceremony on a quiet account.
+        cratefield_auth_core::require_enrolment_ceremony(db, clock, &session.id, &session.user_id)
             .await
             .map_err(|problem| problem.instance(&scope.request_id))?;
     }
@@ -383,7 +385,7 @@ async fn enrolment_gate(
 }
 
 /// Stores the passkey row and returns its id.
-async fn store_credential(
+pub(crate) async fn store_credential(
     db: &dyn cratefield_core::Database,
     id_gen: &dyn cratefield_core::IdGen,
     user_id: &str,
@@ -420,7 +422,7 @@ async fn store_credential(
 
 /// How the browser says this authenticator can be reached (`usb`,
 /// `internal`, `hybrid`), stored so a later login can hint the same route.
-fn transports_of(credential: &RegisterPublicKeyCredential) -> Option<String> {
+pub(crate) fn transports_of(credential: &RegisterPublicKeyCredential) -> Option<String> {
     let transports = credential.response.transports.as_ref()?;
     let names: Vec<String> = transports
         .iter()

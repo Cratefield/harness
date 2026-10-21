@@ -49,6 +49,9 @@ pub fn config_pairs() -> Vec<(String, String)> {
         ("AUTH_PASSKEYS_RP_ID".to_owned(), RP_ID.to_owned()),
         ("AUTH_PASSKEYS_ORIGINS".to_owned(), ORIGIN.to_owned()),
         ("AUTH_PASSKEYS_RP_NAME".to_owned(), "Acme".to_owned()),
+        // The terms a passkey-first sign-up accepts (issue #914).
+        ("AUTH_CORE_TERMS_VERSION".to_owned(), "2026-10".to_owned()),
+        ("AUTH_CORE_PRIVACY_VERSION".to_owned(), "2026-10".to_owned()),
     ]
 }
 

@@ -36,6 +36,36 @@ Both `/email/*` routes refuse a cross-site request first
 (`403 auth/cross-site-request`, #439): moving the address is what every
 later reset mail points at.
 
+## Passkey-first sign-up without an email address (#914)
+
+An account can be made with a passkey alone. `POST /v1/auth-passkeys/signup/options`
+starts the ceremony (a discoverable credential, user verification required, the
+account id as the user handle); `POST /v1/auth-passkeys/signup/verify` completes
+it. No email is asked for. The request carries the caller's acceptance of the
+deployment's current terms and privacy versions (`AUTH_CORE_TERMS_VERSION`,
+`AUTH_CORE_PRIVACY_VERSION`); a mismatch is refused, and the accepted versions
+are recorded with the account. The answer is `201` with the account's `sub`,
+`recovery_codes` (ten, shown once) and a session cookie. Both steps are
+rate-limited per caller address and pass the captcha when one is configured.
+
+**Recovery codes.** Only Argon2id hashes are stored. A code is spent once. A
+regeneration (`POST /recovery/codes`) needs a passkey or email ceremony in the
+last two minutes and replaces the whole set. `POST /recovery/redeem` with
+`{"sub", "recovery_code"}` signs the account in with the `recovery` method: that
+session can enrol a passkey and nothing else, and the redeem starts the 24-hour
+quiet period. A wrong code and an unknown account get the same answer.
+
+**Notices.** Every passkey added or removed, recovery code used and set
+replaced is recorded in the app: `GET /v1/auth-core/notices` lists them for the
+signed-in account, and `POST /v1/auth-core/notices/{id}/read` marks one read. An
+account with an address is also mailed.
+
+**Relying parties: the email claim may be absent.** An access or ID token of an
+account with no address has no `email` or `email_verified` claim. Identify the
+account by `sub` everywhere, and treat `email` as optional. A passkey-only account
+steps up and changes its account on a passkey ceremony alone, exactly as an
+account with an address does.
+
 ## Step-up re-authentication and roles (#912)
 
 `/authorize` honours the two OpenID Connect Core (section 3.1.2.1) requests

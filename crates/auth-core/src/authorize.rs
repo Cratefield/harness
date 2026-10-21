@@ -976,6 +976,33 @@ pub async fn session_proves_by_passkey_or_email(db: &dyn Database, session_id: &
     }
 }
 
+/// The gate on enrolling a passkey on an account that already has one (issue
+/// #914). A recovery sign-in may enrol one, fresh, without the quiet check:
+/// that is what the recovery code is for, and the enrolment itself starts the
+/// quiet period. Anything else needs `require_recent_ceremony`.
+///
+/// # Errors
+///
+/// [`Problem`] as [`require_recent_ceremony`] answers.
+pub async fn require_enrolment_ceremony(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+    user_id: &str,
+) -> Result<(), Problem> {
+    let recovered = match store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(row) => token_endpoint::amr_of(&row).iter().any(|m| m == "recovery"),
+        None => false,
+    };
+    if recovered {
+        return require_recent_session(db, clock, session_id).await;
+    }
+    require_recent_ceremony(db, clock, session_id, user_id).await
+}
+
 /// Records that the account's passkeys or address just changed, so that the
 /// next 24 hours' ceremonies do not count as a step-up.
 ///
