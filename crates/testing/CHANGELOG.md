@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.4...cratefield-testing-v0.5.5) - 2026-10-21
+
+### Other
+
+- updated the following local packages: cratefield-adapter-sqlite, cratefield-adapter-postgres
+
 ## [0.5.4](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.3...cratefield-testing-v0.5.4) - 2026-10-21
 
 ### Other
