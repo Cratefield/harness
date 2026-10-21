@@ -100,8 +100,15 @@ pub fn kit_patched(
     let config_for_ports = config.clone();
     // auth-core is in the module list because it owns the schema: without
     // it there are no `credentials` or `single_use_tokens` tables to write.
+    // The passkey offer is attached as the composition attaches it
+    // (`crates/auth-worker`), so `/authorize` consults it in every test.
+    let passkeys = Passkeys::new();
+    let step = passkeys.sign_in_step();
     let harness = TestHarness::with_ports(
-        vec![Box::new(AuthCore::new()), Box::new(Passkeys::new())],
+        vec![
+            Box::new(AuthCore::new().sign_in_step(step)),
+            Box::new(passkeys),
+        ],
         move |ports| {
             ports.clock = Some(clock_for_ports);
             ports.config = config_for_ports;
@@ -188,6 +195,31 @@ impl Kit {
     }
 }
 
+impl Kit {
+    /// A session signed in by the given methods, at the clock's current
+    /// time. Unlike [`Kit::sign_in`], the clock does not move, so the session
+    /// is as fresh as a sign-in a moment ago: the case the passkey offer
+    /// is for.
+    pub async fn sign_in_as(&self, user_id: &str, amr: &[&str]) -> String {
+        issue(
+            &*self.db,
+            &*self.clock,
+            &*self.id_gen,
+            Login {
+                user_id,
+                ip: None,
+                user_agent: None,
+                presented_cookie: None,
+                presented_session_id: None,
+                amr,
+            },
+        )
+        .await
+        .expect("session issues")
+        .value
+    }
+}
+
 pub struct Res {
     pub status: StatusCode,
     pub headers: http::HeaderMap,
@@ -252,6 +284,50 @@ pub async fn send_with_headers(
             .expect("request"),
         None => builder.body(axum::body::Body::empty()).expect("request"),
     };
+    let response = kit
+        .harness
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, 4 * 1024 * 1024)
+        .await
+        .expect("body reads");
+    Res {
+        status: parts.status,
+        headers: parts.headers,
+        body: body.to_vec(),
+    }
+}
+
+/// A `application/x-www-form-urlencoded` POST, the way a browser form sends
+/// it, with the given headers (`origin`, `sec-fetch-site`, …).
+pub async fn send_form(
+    kit: &Kit,
+    path: &str,
+    form: &str,
+    cookie: Option<&str>,
+    extra: &[(&str, &str)],
+) -> Res {
+    use tower::ServiceExt;
+    let mut builder = axum::http::Request::builder()
+        .method(http::Method::POST)
+        .uri(path)
+        .header(
+            http::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        );
+    if let Some(cookie) = cookie {
+        builder = builder.header(http::header::COOKIE, format!("__Host-session={cookie}"));
+    }
+    for (name, value) in extra {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder
+        .body(axum::body::Body::from(form.to_owned()))
+        .expect("request");
     let response = kit
         .harness
         .router

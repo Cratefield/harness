@@ -28,8 +28,10 @@
 
 mod add;
 mod budget;
+mod ceremony;
 mod challenge;
 mod login;
+mod offer;
 mod prf;
 mod register;
 mod request;
@@ -138,6 +140,20 @@ const MIGRATION_PASSKEY_PRF_POSTGRES: SqlMigration = SqlMigration::new(
     "0002",
     "passkey_prf",
     include_str!("../migrations/postgres/0002_passkey_prf.sql"),
+);
+
+/// The passkey offer's "Not now" ledger (see `offer`). Added after 0002, so
+/// an instance that already ran 0001 and 0002 picks it up in order.
+const MIGRATION_OFFER_DISMISSALS: SqlMigration = SqlMigration::new(
+    "0003",
+    "offer_dismissals",
+    include_str!("../migrations/sqlite/0003_offer_dismissals.sql"),
+);
+
+const MIGRATION_OFFER_DISMISSALS_POSTGRES: SqlMigration = SqlMigration::new(
+    "0003",
+    "offer_dismissals",
+    include_str!("../migrations/postgres/0003_offer_dismissals.sql"),
 );
 
 pub(crate) fn iso(at: OffsetDateTime) -> String {
@@ -310,6 +326,15 @@ impl Passkeys {
     pub fn new() -> Self {
         Self
     }
+
+    /// The sign-in step that offers a passkey after a magic-link or password
+    /// sign-in, to be attached to `auth-core`'s `AuthCore` with
+    /// `AuthCore::sign_in_step`. It does nothing unless
+    /// `AUTH_PASSKEYS_OFFER_AFTER_SIGNIN` is `true`.
+    #[must_use]
+    pub fn sign_in_step(&self) -> Arc<dyn cratefield_auth_core::SignInStep> {
+        Arc::new(offer::PasskeyOffer)
+    }
 }
 
 impl Module for Passkeys {
@@ -343,7 +368,11 @@ impl Module for Passkeys {
     /// module's policy, the way the sign-in-link send cooldown is
     /// auth-magic-link's.
     fn tables(&self) -> &'static [&'static str] {
-        &["auth_passkeys_challenge_budget", "auth_passkeys_prf"]
+        &[
+            "auth_passkeys_challenge_budget",
+            "auth_passkeys_prf",
+            offer::DISMISSALS_TABLE,
+        ]
     }
 
     /// The budget row is a counter keyed by a composite subject —
@@ -373,6 +402,17 @@ impl Module for Passkeys {
                 ),
                 description: "How many passkey sign-in attempts your address or network made \
                               recently, so the login page cannot be swept for accounts.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: offer::DISMISSALS_TABLE,
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "That you chose \"Not now\" on the offer to add a passkey when \
+                              you signed in, and when. It is what keeps the offer quiet for \
+                              the snooze.",
                 redacted: &[],
                 subject_via: None,
             },
@@ -407,14 +447,21 @@ impl Module for Passkeys {
     }
 
     fn migrations(&self) -> Migrations {
-        const MIGRATIONS: [SqlMigration; 2] = [MIGRATION_CHALLENGE_BUDGET, MIGRATION_PASSKEY_PRF];
+        const MIGRATIONS: [SqlMigration; 3] = [
+            MIGRATION_CHALLENGE_BUDGET,
+            MIGRATION_PASSKEY_PRF,
+            MIGRATION_OFFER_DISMISSALS,
+        ];
         // Refuses a gap, a duplicate or an entry out of order at build
         // time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale, so the Postgres list carries
         // both: 0002 differs, 0001 is portable and is reused (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 2] =
-            [MIGRATION_CHALLENGE_BUDGET, MIGRATION_PASSKEY_PRF_POSTGRES];
+        const MIGRATIONS_POSTGRES: [SqlMigration; 3] = [
+            MIGRATION_CHALLENGE_BUDGET,
+            MIGRATION_PASSKEY_PRF_POSTGRES,
+            MIGRATION_OFFER_DISMISSALS_POSTGRES,
+        ];
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS_POSTGRES);
         Migrations {
             sqlite: &MIGRATIONS,
@@ -423,15 +470,21 @@ impl Module for Passkeys {
     }
 
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
-        match RelyingParty::from_config(cfg) {
-            Ok(_) => Ok(()),
-            Err(problems) => {
-                let mut errors = ConfigError::default();
-                for problem in problems {
-                    errors.push(format!("auth-passkeys: {problem}"));
-                }
-                Err(errors)
+        let mut errors = ConfigError::default();
+        if let Err(problems) = RelyingParty::from_config(cfg) {
+            for problem in problems {
+                errors.push(format!("auth-passkeys: {problem}"));
             }
+        }
+        if let Err(problems) = offer::OfferSettings::from_config(cfg) {
+            for problem in problems {
+                errors.push(format!("auth-passkeys: {problem}"));
+            }
+        }
+        if errors.problems.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 
@@ -458,6 +511,7 @@ impl Module for Passkeys {
             .merge(login::router())
             .merge(add::router())
             .merge(prf::router())
+            .merge(offer::router())
             .with_state(state)
     }
 
@@ -486,22 +540,32 @@ mod tests {
     }
 
     #[test]
-    fn the_module_owns_only_its_budget_and_prf_salt_because_auth_core_owns_the_rest() {
+    fn the_module_owns_only_its_budget_prf_salt_and_offer_ledger_because_auth_core_owns_the_rest() {
         let module = Passkeys::new();
         assert_eq!(module.name(), "auth-passkeys");
-        // Two tables: the challenge budget ledger and the PRF salt.
-        // `auth-core` owns every other row this module writes; another name
-        // appearing here means something was declared in the wrong module.
+        // Three tables: the challenge budget ledger, the PRF salt and the
+        // passkey offer's "Not now" ledger. `auth-core` owns every other row
+        // this module writes; another name appearing here means something
+        // was declared in the wrong module.
         assert_eq!(
             module.tables(),
-            ["auth_passkeys_challenge_budget", "auth_passkeys_prf"]
+            [
+                "auth_passkeys_challenge_budget",
+                "auth_passkeys_prf",
+                "auth_passkeys_offer_dismissals",
+            ]
         );
         let migrations = module.migrations().sqlite;
-        assert_eq!(migrations.len(), 2, "one migration per owned table");
+        assert_eq!(migrations.len(), 3, "one migration per owned table");
         assert_eq!(migrations[0].id, "0001");
         assert_eq!(migrations[0].sql, MIGRATION_CHALLENGE_BUDGET.sql);
         assert_eq!(migrations[1].id, "0002");
         assert_eq!(migrations[1].sql, MIGRATION_PASSKEY_PRF.sql);
+        assert_eq!(migrations[2].id, "0003");
+        assert_eq!(migrations[2].sql, MIGRATION_OFFER_DISMISSALS.sql);
+        let postgres = module.migrations().postgres;
+        assert_eq!(postgres.len(), 3);
+        assert_eq!(postgres[2].sql, MIGRATION_OFFER_DISMISSALS_POSTGRES.sql);
         assert_eq!(module.requires(), [Port::Db, Port::Clock, Port::IdGen]);
         assert!(module.public_writes());
     }
@@ -614,6 +678,37 @@ mod tests {
         assert_eq!(rp.user_verification, UserVerification::Preferred);
         assert_eq!(rp.origins.len(), 1);
         assert_eq!(rp.origins[0].as_str(), "https://auth.acme.example/");
+    }
+
+    #[test]
+    fn the_passkey_offer_is_off_unless_it_says_true_and_its_snooze_is_a_sane_number_of_days() {
+        let off = Passkeys::new()
+            .validate_config(&config(&[("AUTH_PASSKEYS_RP_ID", "auth.acme.example")]));
+        assert!(off.is_ok());
+        for bad in ["yes", "1", "on"] {
+            let error = Passkeys::new()
+                .validate_config(&config(&[
+                    ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
+                    ("AUTH_PASSKEYS_OFFER_AFTER_SIGNIN", bad),
+                ]))
+                .expect_err("only true or false");
+            assert!(
+                error.to_string().contains("OFFER_AFTER_SIGNIN"),
+                "{bad}: {error}"
+            );
+        }
+        for bad in ["0", "366", "soon"] {
+            let error = Passkeys::new()
+                .validate_config(&config(&[
+                    ("AUTH_PASSKEYS_RP_ID", "auth.acme.example"),
+                    ("AUTH_PASSKEYS_OFFER_SNOOZE_DAYS", bad),
+                ]))
+                .expect_err("a whole number of days from 1 to 365");
+            assert!(
+                error.to_string().contains("OFFER_SNOOZE_DAYS"),
+                "{bad}: {error}"
+            );
+        }
     }
 
     #[test]

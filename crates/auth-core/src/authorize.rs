@@ -44,9 +44,11 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::ModuleState;
 use crate::brand::Brand;
+use crate::page::wants_html;
 use crate::redirect_uri::matches_any;
 use crate::secrets;
 use crate::sessions;
+use crate::sign_in_step::{MARKER_COOKIE, SignIn};
 use crate::sso;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE};
 use crate::token_endpoint;
@@ -1003,6 +1005,29 @@ pub async fn require_enrolment_ceremony(
     require_recent_ceremony(db, clock, session_id, user_id).await
 }
 
+/// Whether this browser's marker cookie names this session: the step already
+/// answered here for this sign-in, so it is not asked again.
+fn step_answered_here(headers: &HeaderMap, session_id: &str) -> bool {
+    let prefix = format!("{MARKER_COOKIE}=");
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().strip_prefix(prefix.as_str()))
+        .any(|value| value == session_id)
+}
+
+/// The methods a session was signed in by, as its row records them. A
+/// session that cannot be read has none.
+async fn session_methods(db: &dyn Database, session_id: &str) -> Result<Vec<String>, Problem> {
+    Ok(store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+        .map(|row| token_endpoint::amr_of(&row))
+        .unwrap_or_default())
+}
+
 /// Whether the session was signed in by a recovery code and nothing else. Such
 /// a session is for enrolling a passkey only (issue #914).
 async fn recovery_only(db: &dyn Database, session_id: &str) -> Result<bool, Problem> {
@@ -1477,6 +1502,35 @@ async fn authorize(
             step_up_transaction.as_deref(),
             browser_cookie.as_deref(),
         ));
+    }
+
+    // A sign-in that has just happened may be sent through the composition's
+    // post-sign-in step (the passkey offer) before its code is minted. Only
+    // a real, fresh, non-step-up, page-wanting sign-in qualifies, so a long
+    // session or an API client is never interrupted (see `SignInStep`).
+    if let Some(step) = state.sign_in_step.clone()
+        && !prompt.none
+        && !prompt.login
+        && max_age.is_none()
+        && query.step_up.is_none()
+        && stepped_up_at.is_none()
+        && wants_html(&headers)
+        && !step_answered_here(&headers, &session.id)
+        && require_recent_session(&*db, &*clock, &session.id)
+            .await
+            .is_ok()
+    {
+        let amr = session_methods(&*db, &session.id).await?;
+        let continue_to = return_to(None);
+        let sign_in = SignIn {
+            user_id: &session.user_id,
+            session_id: &session.id,
+            amr: &amr,
+            continue_to: &continue_to,
+        };
+        if let Some(location) = step.divert(&state.ctx, sign_in).await? {
+            return Ok((StatusCode::FOUND, [(header::LOCATION, location)]).into_response());
+        }
     }
 
     let openid = query.scope.as_deref().is_some_and(|scope| {
