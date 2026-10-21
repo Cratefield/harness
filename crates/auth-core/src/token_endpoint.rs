@@ -42,7 +42,7 @@ use crate::ModuleState;
 use crate::secrets;
 use crate::store::{self, TOKEN_AUTHORIZATION_CODE, UserRow};
 use crate::tokens::{
-    self, SigningKeys, TOKENS_UNCONFIGURED, mint_access_token, mint_refresh_token,
+    self, SigningKeys, TOKENS_UNCONFIGURED, mint_access_token, mint_id_token, mint_refresh_token,
 };
 
 /// The one answer every refused token request sees. The description
@@ -139,11 +139,52 @@ fn amr_of(session: &store::SessionRow) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// When the session's person last authenticated in a real ceremony, as
+/// epoch seconds (issue #912). That is the session's creation: a login
+/// creates the session, and a refresh never touches its `created_at`.
+fn auth_time_of(session: &store::SessionRow) -> Result<i64, Problem> {
+    OffsetDateTime::parse(&session.created_at, &Rfc3339)
+        .map(OffsetDateTime::unix_timestamp)
+        .map_err(|_| {
+            tracing::error!("session created_at is malformed");
+            Problem::internal()
+        })
+}
+
+/// The `roles` claim for this token (issue #912): the account's role, and
+/// only when the client is registered to receive the claim. `None`
+/// otherwise, so a client that did not ask never sees the claim.
+async fn roles_for(
+    db: &dyn Database,
+    client_id: &str,
+    user: &UserRow,
+) -> Result<Option<Vec<String>>, Problem> {
+    if !store::client_roles_claim(db, client_id).await? {
+        return Ok(None);
+    }
+    let role = store::user_role(db, &user.id)
+        .await?
+        .unwrap_or_else(|| "member".to_owned());
+    Ok(Some(vec![role]))
+}
+
 /// Mints a fresh access token beside an already-minted refresh token
 /// and answers the token response. The refresh token is passed in
 /// because the two grants mint it in different places: the code grant
 /// here (via [`mint_pair`]), the refresh grant inside the exchange,
 /// which must record the successor in the consumed row (issue #655).
+///
+/// Whether the response carries an ID token. Only the code grant issues
+/// one: an ID token describes the authentication that happened, and a
+/// refresh is not one, so the refresh grant answers with an access token
+/// and a refresh token alone, as OpenID Connect Core section 12.2 allows.
+#[derive(Clone, Copy)]
+enum IdToken<'a> {
+    Omit,
+    Issue { nonce: Option<&'a str> },
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn minted_response(
     db: &dyn Database,
     clock: &dyn Clock,
@@ -152,12 +193,15 @@ async fn minted_response(
     user: &UserRow,
     client_id: &str,
     refresh: &str,
+    id_token: IdToken<'_>,
 ) -> Result<Response, Problem> {
     let email = user
         .primary_email
         .as_deref()
         .map(|email| (email, user.primary_email_verified));
     let amr = amr_of(session);
+    let auth_time = auth_time_of(session)?;
+    let roles = roles_for(db, client_id, user).await?;
     // The session's SSO connection (issue #627), named in the token only
     // while it still belongs to the client the token is for and is still
     // active: a connection is a fact about one venture's organization, so
@@ -182,22 +226,43 @@ async fn minted_response(
         client_id,
         sso_connection,
         &amr,
+        auth_time,
+        roles.as_deref(),
     )
     .map_err(|err| {
         tracing::error!(error = %err, "access-token mint failed");
         Problem::internal()
     })?;
-    Ok(Json(json!({
+    let mut body = json!({
         "access_token": access,
         "token_type": "Bearer",
         "expires_in": tokens::ACCESS_TOKEN_SECS,
         "refresh_token": refresh,
-    }))
-    .into_response())
+    });
+    if let IdToken::Issue { nonce } = id_token {
+        let id = mint_id_token(
+            keys,
+            clock,
+            &user.id,
+            email,
+            client_id,
+            auth_time,
+            &amr,
+            nonce,
+            roles.as_deref(),
+        )
+        .map_err(|err| {
+            tracing::error!(error = %err, "id-token mint failed");
+            Problem::internal()
+        })?;
+        body["id_token"] = json!(id);
+    }
+    Ok(Json(body).into_response())
 }
 
 /// The authorization-code path mints both halves; the refresh path
 /// already has its refresh token from the exchange.
+#[allow(clippy::too_many_arguments)]
 async fn mint_pair(
     db: &dyn Database,
     clock: &dyn Clock,
@@ -206,6 +271,7 @@ async fn mint_pair(
     session: &store::SessionRow,
     user: &UserRow,
     client_id: &str,
+    nonce: Option<&str>,
 ) -> Result<Response, Problem> {
     let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id)
         .await
@@ -213,7 +279,17 @@ async fn mint_pair(
             tracing::error!(error = %err, "minting a refresh token failed");
             Problem::internal()
         })?;
-    minted_response(db, clock, keys, session, user, client_id, &refresh).await
+    minted_response(
+        db,
+        clock,
+        keys,
+        session,
+        user,
+        client_id,
+        &refresh,
+        IdToken::Issue { nonce },
+    )
+    .await
 }
 
 async fn token(
@@ -346,6 +422,8 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
         subject_hash = %subject_hash(&user.id),
         "authorization code exchanged"
     );
+    // The nonce the authorization request carried, if it carried one.
+    let nonce = payload.get("nonce").and_then(Value::as_str);
     mint_pair(
         db,
         clock,
@@ -354,6 +432,7 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
         &session,
         &user,
         client_id,
+        nonce,
     )
     .await
 }
@@ -394,6 +473,7 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
         &user,
         client_id,
         &granted.refresh_token,
+        IdToken::Omit,
     )
     .await
 }

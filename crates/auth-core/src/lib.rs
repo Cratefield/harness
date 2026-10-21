@@ -287,6 +287,17 @@ const MIGRATION_USER_ADMIN_AUDIT: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0012_user_admin_audit.sql"),
 );
 
+/// The step-up migration of issue #912: `users.role` (owner, admin or
+/// member), `users.reauth_requested_at` (a pending demand for a fresh
+/// ceremony) and `clients.roles_claim` (whether a client's tokens carry
+/// `roles`). Three additive columns, portable DDL, so the Postgres set
+/// reuses this file (ADR 0004).
+const MIGRATION_STEP_UP: SqlMigration = SqlMigration::new(
+    "0013",
+    "step_up",
+    include_str!("../migrations/sqlite/0013_step_up.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -600,7 +611,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 12] = [
+        const MIGRATIONS: [SqlMigration; 13] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -613,17 +624,18 @@ impl Module for AuthCore {
             MIGRATION_SSO_CONNECTIONS,
             MIGRATION_EMAIL_CHANGE,
             MIGRATION_USER_ADMIN_AUDIT,
+            MIGRATION_STEP_UP,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
         const _: () = cratefield_core::assert_migration_set(&MIGRATIONS);
         // The runner selects one set wholesale (harness issue #18), so the
-        // Postgres list carries all twelve: the six whose SQL truly
+        // Postgres list carries all thirteen: the six whose SQL truly
         // differs (BYTEA for the byte columns in four, the in-place CHECK
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 12] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 13] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -636,6 +648,7 @@ impl Module for AuthCore {
             MIGRATION_SSO_CONNECTIONS_POSTGRES,
             MIGRATION_EMAIL_CHANGE_POSTGRES,
             MIGRATION_USER_ADMIN_AUDIT,
+            MIGRATION_STEP_UP,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -889,9 +902,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 12);
+        assert_eq!(migrations.sqlite.len(), 13);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -916,10 +930,12 @@ mod tests {
         assert_eq!(migrations.sqlite[10].name, "email_change");
         assert_eq!(migrations.sqlite[11].id, "0012");
         assert_eq!(migrations.sqlite[11].name, "user_admin_audit");
+        assert_eq!(migrations.sqlite[12].id, "0013");
+        assert_eq!(migrations.sqlite[12].name, "step_up");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 12);
+        assert_eq!(migrations.postgres.len(), 13);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -964,6 +980,11 @@ mod tests {
             "the audit table is portable DDL, so Postgres reuses the sqlite file"
         );
         assert_eq!(migrations.postgres[1].sql, migrations.sqlite[1].sql);
+        // The step-up columns are portable DDL too (issue #912).
+        assert_eq!(
+            migrations.postgres[12].sql, migrations.sqlite[12].sql,
+            "the step-up columns are portable DDL, so Postgres reuses the sqlite file"
+        );
         assert_eq!(
             migrations.postgres[6].sql, migrations.sqlite[6].sql,
             "the locale column is portable DDL, so Postgres reuses the sqlite file"

@@ -2108,3 +2108,139 @@ pub async fn update_sso_connection(
         .and_where(Expr::col(iden("id")).eq(id));
     db.execute(&Statement::render(&update)).await
 }
+
+// ---------------------------------------------------------------------------
+// step-up re-authentication and roles (issue #912)
+
+/// The role an account holds in this instance: `owner`, `admin` or
+/// `member`. `None` for an account that does not exist.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn user_role(db: &dyn Database, id: &str) -> Result<Option<String>, DbError> {
+    let query = Query::select()
+        .column(iden("role"))
+        .from(iden("users"))
+        .and_where(Expr::col(iden("id")).eq(id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .first()
+        .map(|row| row.get::<String>("role").unwrap_or_default()))
+}
+
+/// Sets an account's role. The caller has validated the role name; the
+/// column's CHECK refuses anything else as a backstop.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn set_user_role(
+    db: &dyn Database,
+    id: &str,
+    role: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([
+            (iden("role"), role.into()),
+            (iden("updated_at"), now.into()),
+        ])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Whether a client's tokens carry the `roles` claim. `false` for a client
+/// that does not exist: the claim is only ever emitted for a registered
+/// client that asked for it.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn client_roles_claim(db: &dyn Database, id: &str) -> Result<bool, DbError> {
+    let query = Query::select()
+        .column(iden("roles_claim"))
+        .from(iden("clients"))
+        .and_where(Expr::col(iden("id")).eq(id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows.first().is_some_and(|row| boolean(row, "roles_claim")))
+}
+
+/// Turns a client's `roles` claim on or off.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn set_client_roles_claim(
+    db: &dyn Database,
+    id: &str,
+    enabled: bool,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("clients"))
+        .values([(iden("roles_claim"), enabled.into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// When a request last demanded a fresh authentication ceremony for this
+/// account, or `None` when nothing is pending.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn reauth_requested_at(
+    db: &dyn Database,
+    user_id: &str,
+) -> Result<Option<String>, DbError> {
+    let query = Query::select()
+        .column(iden("reauth_requested_at"))
+        .from(iden("users"))
+        .and_where(Expr::col(iden("id")).eq(user_id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get::<Option<String>>("reauth_requested_at").flatten()))
+}
+
+/// Records a demand for a fresh ceremony at `now`. A ceremony that
+/// completes strictly after `now` satisfies it.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn request_reauth(
+    db: &dyn Database,
+    user_id: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([(iden("reauth_requested_at"), now.into())])
+        .and_where(Expr::col(iden("id")).eq(user_id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Clears a pending demand for a fresh ceremony, once one has been met.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn clear_reauth_request(db: &dyn Database, user_id: &str) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("users"))
+        .values([(iden("reauth_requested_at"), Option::<String>::None.into())])
+        .and_where(Expr::col(iden("id")).eq(user_id));
+    db.execute(&Statement::render(&update)).await
+}

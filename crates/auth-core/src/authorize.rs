@@ -399,6 +399,151 @@ struct AuthorizeQuery {
     /// through, for a caller that knows the person's address but not the
     /// connection. A hint, never an instruction.
     login_hint: Option<String>,
+    /// OpenID Connect `prompt` (Core section 3.1.2.1): space-separated
+    /// values. `login` forces a fresh ceremony even with a live session
+    /// (issue #912); `none` forbids any interaction.
+    prompt: Option<String>,
+    /// OpenID Connect `max_age` (Core section 3.1.2.1), as sent: the
+    /// longest acceptable time since the last authentication, in seconds.
+    /// `0` means the person must authenticate now. Parsed by
+    /// [`parse_max_age`] so a malformed value is refused with an OAuth
+    /// error rather than a rejected query.
+    max_age: Option<String>,
+    /// OpenID Connect `nonce`: echoed into the ID token so the client can
+    /// tie the token to its own request (issue #912).
+    nonce: Option<String>,
+}
+
+/// The longest `nonce` accepted. Opaque to this service and echoed
+/// verbatim into the ID token, so the bound is a sanity limit.
+const MAX_NONCE_BYTES: usize = 512;
+
+/// The `prompt` values this service understands: `none`, `login`, and
+/// `consent` / `select_account`, which name interactions it does not
+/// have and so accepts without acting on.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Prompt {
+    none: bool,
+    login: bool,
+}
+
+/// Reads `prompt`. Any unknown value, or `none` alongside another value
+/// (OpenID Connect Core section 3.1.2.1 forbids that), is an error.
+fn parse_prompt(raw: Option<&str>) -> Result<Prompt, ()> {
+    let mut prompt = Prompt::default();
+    let Some(raw) = raw else {
+        return Ok(prompt);
+    };
+    let values: Vec<&str> = raw.split_ascii_whitespace().collect();
+    for value in &values {
+        match *value {
+            "none" => prompt.none = true,
+            "login" => prompt.login = true,
+            "consent" | "select_account" => {}
+            _ => return Err(()),
+        }
+    }
+    if prompt.none && values.len() > 1 {
+        return Err(());
+    }
+    Ok(prompt)
+}
+
+/// Reads `max_age`: decimal digits only, so `-1`, `+5` and `1.5` are all
+/// refused. An absent value is no requirement.
+fn parse_max_age(raw: Option<&str>) -> Result<Option<i64>, ()> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if raw.is_empty() || raw.len() > 10 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(());
+    }
+    raw.parse::<i64>().map(Some).map_err(|_| ())
+}
+
+/// `path_and_query` with the named query parameters removed. The login
+/// chooser hands the pending request back to itself; a demand the login
+/// it is about to complete has already met must not travel with it.
+fn without_query_params(path_and_query: &str, names: &[&str]) -> String {
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return path_and_query.to_owned();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !names.contains(&pair.split('=').next().unwrap_or_default()))
+        .collect();
+    if kept.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    }
+}
+
+/// Whether the live session has to make a fresh authentication ceremony
+/// before a code may be minted (issue #912, OpenID Connect Core section
+/// 3.1.2.1).
+///
+/// `prompt=login` and `max_age=0` demand a ceremony that completes after
+/// the demand was made: the demand is recorded on the account
+/// (`users.reauth_requested_at`), and the session the browser holds
+/// satisfies it only if it was created strictly after that moment. A
+/// session created before the request, however recent, never satisfies
+/// it, and a request cannot forge a satisfying session, because the only
+/// way to get one is a login method, which is itself the ceremony.
+///
+/// `max_age=N` (N > 0) is a plain age check against the session's
+/// creation, which is the moment of its last real authentication: a
+/// refresh never touches it, so a refreshed token does not look fresh.
+///
+/// Returns `true` when a ceremony is required; the demand is then
+/// recorded so that the ceremony which follows can satisfy it.
+async fn step_up_required(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session: &sessions::ValidSession,
+    prompt: Prompt,
+    max_age: Option<i64>,
+) -> Result<bool, Problem> {
+    if !prompt.login && max_age.is_none() {
+        return Ok(false);
+    }
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    // Fail closed: a session that cannot be read is treated as one that
+    // needs the ceremony.
+    let Some(row) = store::session_by_id(db, &session.id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Ok(true);
+    };
+    let created =
+        OffsetDateTime::parse(&row.created_at, &Rfc3339).map_err(|_| Problem::internal())?;
+    let age = (now - created).whole_seconds();
+    let must_ceremony = prompt.login || max_age == Some(0);
+    let within_age = max_age.is_none_or(|limit| limit == 0 || age <= limit);
+    let satisfied = if must_ceremony {
+        let pending = store::reauth_requested_at(db, &session.user_id)
+            .await
+            .map_err(|_| Problem::internal())?
+            .map(|raw| OffsetDateTime::parse(&raw, &Rfc3339).map_err(|_| Problem::internal()))
+            .transpose()?;
+        let ceremony_after_demand = pending.is_some_and(|requested| created > requested);
+        ceremony_after_demand && within_age
+    } else {
+        within_age
+    };
+    if satisfied {
+        if must_ceremony {
+            store::clear_reauth_request(db, &session.user_id)
+                .await
+                .map_err(|_| Problem::internal())?;
+        }
+        return Ok(false);
+    }
+    store::request_reauth(db, &session.user_id, &iso(now))
+        .await
+        .map_err(|_| Problem::internal())?;
+    Ok(true)
 }
 
 /// Validates the client and the exact redirect URI. `Err` renders the
@@ -489,17 +634,44 @@ async fn authorize(
             None,
         ));
     }
+    // Step-up parameters (issue #912): a malformed one is an OAuth error
+    // from the registered URI, the same as any other bad parameter.
+    let (Ok(prompt), Ok(max_age)) = (
+        parse_prompt(query.prompt.as_deref()),
+        parse_max_age(query.max_age.as_deref()),
+    ) else {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "invalid_request",
+            query.state.as_deref(),
+        ));
+    };
+    if query
+        .nonce
+        .as_deref()
+        .is_some_and(|nonce| nonce.len() > MAX_NONCE_BYTES)
+    {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "invalid_request",
+            query.state.as_deref(),
+        ));
+    }
 
-    // A session is required to mint a code; without one, the login
-    // chooser. Its buttons carry this very request as `return_to`, so a
-    // person lands back on the pending `/authorize` rather than on the
-    // service's root with their request lost.
-    //
+    // The session, read once: the SSO routing below and the code minting
+    // further down both decide on it.
+    let session = match sessions::cookie_value(&headers) {
+        Some(cookie) => sessions::validate(&*db, &*clock, &cookie)
+            .await
+            .map_err(|_| Problem::internal())?,
+        None => None,
+    };
+
     // `OriginalUri` and not `Uri`: the module is nested under
     // `/v1/auth-core`, and a nested handler sees the URI with the prefix
     // already stripped, so `Uri` alone would send people to `/authorize`,
     // which does not exist.
-    //
+
     // Path and query, never `to_string()`: on Workers the runtime builds
     // the request from `req.url()`, so the URI is **absolute**:
     // `https://auth.example/v1/auth-core/authorize?...`. Every provider's
@@ -510,21 +682,43 @@ async fn authorize(
     // the native runtime the same URI arrives in origin form, so the bug
     // only appears in production, which is why the tests were green. See
     // the test that sends an absolute-form target.
+    //
+    // Without a session the chooser's login is itself the fresh
+    // ceremony, so `prompt` and `max_age` are dropped on the way back:
+    // the request they would demand has been met by the login that is
+    // about to happen, and carrying them would ask for a second one.
+    // A session is required to mint a code; without one, the login
+    // chooser. Its buttons carry this very request as `return_to`, so a
+    // person lands back on the pending `/authorize` rather than on the
+    // service's root with their request lost.
+    let signed_in = session.is_some();
     let return_to = || {
-        original_uri.path_and_query().map_or_else(
+        let path_and_query = original_uri.path_and_query().map_or_else(
             || DEFAULT_CHOOSER_RETURN_TO.to_owned(),
             |path_and_query| path_and_query.as_str().to_owned(),
-        )
+        );
+        if signed_in {
+            path_and_query
+        } else {
+            without_query_params(&path_and_query, &["prompt", "max_age"])
+        }
     };
 
-    // The session, read once: the SSO routing below and the code minting
-    // further down both decide on it.
-    let session = match sessions::cookie_value(&headers) {
-        Some(cookie) => sessions::validate(&*db, &*clock, &cookie)
+    // Step-up (issue #912) decides before any routing or minting: with
+    // `prompt=none` the answer is a refusal, not a page.
+    let step_up = match &session {
+        Some(live) => step_up_required(&*db, &*clock, live, prompt, max_age)
             .await
             .map_err(|_| Problem::internal())?,
-        None => None,
+        None => false,
     };
+    if prompt.none && (session.is_none() || step_up) {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "login_required",
+            query.state.as_deref(),
+        ));
+    }
 
     // A connection named outright (issue #627). Only this client's own
     // active connections are routable: another client's id, an id that
@@ -548,8 +742,11 @@ async fn authorize(
         // proceeds to a code like any other session's. Anything else —
         // no session, or a session from another way in, or from another
         // connection — has to go and become one first.
-        let on_this_connection =
-            session.as_ref().and_then(|s| s.sso_connection.as_deref()) == Some(connection_id);
+        //
+        // A step-up demand (issue #912) is never met by the connection the
+        // session already came through: it goes back to the IdP.
+        let on_this_connection = !step_up
+            && session.as_ref().and_then(|s| s.sso_connection.as_deref()) == Some(connection_id);
         if !on_this_connection {
             return Ok(sso_start_redirect(connection_id, &return_to()));
         }
@@ -583,6 +780,11 @@ async fn authorize(
     let Some(session) = session else {
         return Ok(chooser());
     };
+    // A live session that has to make the ceremony again (issue #912)
+    // gets the chooser, carrying this request back, rather than a code.
+    if step_up {
+        return Ok(chooser());
+    }
 
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|err| {
@@ -604,6 +806,9 @@ async fn authorize(
                     "redirect_uri": query.redirect_uri,
                     "code_challenge": query.code_challenge,
                     "sid": session.id,
+                    // The request's nonce, echoed into the ID token
+                    // (issue #912). Absent when the client sent none.
+                    "nonce": query.nonce,
                 })
                 .to_string(),
             ),
@@ -974,5 +1179,65 @@ mod tests {
         assert!(!is_base64url_43(
             "d+BjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjX"
         ));
+    }
+
+    #[test]
+    fn prompt_values_are_read_strictly() {
+        assert_eq!(parse_prompt(None), Ok(Prompt::default()));
+        assert_eq!(
+            parse_prompt(Some("login")),
+            Ok(Prompt {
+                none: false,
+                login: true
+            })
+        );
+        assert_eq!(
+            parse_prompt(Some("consent select_account")),
+            Ok(Prompt::default())
+        );
+        assert_eq!(
+            parse_prompt(Some("none")),
+            Ok(Prompt {
+                none: true,
+                login: false
+            })
+        );
+        // `none` is never combined, and an unknown value is refused.
+        assert_eq!(parse_prompt(Some("none login")), Err(()));
+        assert_eq!(parse_prompt(Some("bogus")), Err(()));
+        assert_eq!(parse_prompt(Some("login bogus")), Err(()));
+    }
+
+    #[test]
+    fn max_age_accepts_only_decimal_digits() {
+        assert_eq!(parse_max_age(None), Ok(None));
+        assert_eq!(parse_max_age(Some("0")), Ok(Some(0)));
+        assert_eq!(parse_max_age(Some("300")), Ok(Some(300)));
+        for bad in ["", "-1", "+5", "1.5", "abc", "99999999999"] {
+            assert_eq!(parse_max_age(Some(bad)), Err(()), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn stripping_a_demand_leaves_the_rest_of_the_request_intact() {
+        assert_eq!(
+            without_query_params(
+                "/v1/auth-core/authorize?client_id=c&prompt=login&state=s&max_age=0",
+                &["prompt", "max_age"]
+            ),
+            "/v1/auth-core/authorize?client_id=c&state=s"
+        );
+        assert_eq!(
+            without_query_params(
+                "/v1/auth-core/authorize?prompt=login",
+                &["prompt", "max_age"]
+            ),
+            "/v1/auth-core/authorize"
+        );
+        assert_eq!(
+            without_query_params("/v1/auth-core/authorize?state=x&promptx=1", &["prompt"]),
+            "/v1/auth-core/authorize?state=x&promptx=1"
+        );
+        assert_eq!(without_query_params("/plain", &["prompt"]), "/plain");
     }
 }

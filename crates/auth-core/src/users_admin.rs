@@ -52,6 +52,7 @@ pub(crate) fn router(state: Arc<ModuleState>) -> axum::Router {
         .route("/admin/users/{sub}/disable", post(disable))
         .route("/admin/users/{sub}/enable", post(enable))
         .route("/admin/users/{sub}/passkeys", get(passkeys))
+        .route("/admin/users/{sub}/role", post(set_role))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::clients::admin_guard,
@@ -91,6 +92,56 @@ async fn enable(
     Path(sub): Path<String>,
 ) -> Result<Response, Problem> {
     switch(&scope, &state, &sub, STATUS_ACTIVE, "user.enable").await
+}
+
+/// The roles an account can hold in this instance (issue #912), least to
+/// most: `member` is every account's default, `admin` and `owner` are
+/// granted by an operator through [`set_role`]. A client's tokens carry the
+/// role only when the client registered for the `roles` claim.
+pub(crate) const ROLES: [&str; 3] = ["owner", "admin", "member"];
+
+#[derive(serde::Deserialize)]
+struct RoleBody {
+    role: String,
+}
+
+/// `POST /admin/users/{sub}/role` with `{"role": "owner" | "admin" |
+/// "member"}` — the one way an account gains a role (issue #912). Roles
+/// are read when a token is minted, so a change reaches new tokens at
+/// once, and tokens already minted run out within their lifetime. Nothing
+/// on the client side can set one: a role is never taken from a request
+/// the client made.
+async fn set_role(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    Path(sub): Path<String>,
+    Json(body): Json<RoleBody>,
+) -> Result<Response, Problem> {
+    if !ROLES.contains(&body.role.as_str()) {
+        return Err(crate::clients::bad_request(
+            &scope,
+            format!("role must be one of {}", ROLES.join(", ")),
+        ));
+    }
+    let (Some(db), Some(clock)) = (state.ctx.ports.db.clone(), state.ctx.ports.clock.clone())
+    else {
+        return Err(internal(&scope));
+    };
+    store::user_by_id(&*db, &sub)
+        .await?
+        .ok_or_else(|| Problem::not_found().instance(&scope.request_id))?;
+    let now = crate::clients::now_iso(&*clock);
+    if store::set_user_role(&*db, &sub, &body.role, &now).await? == 0 {
+        return Err(Problem::not_found().instance(&scope.request_id));
+    }
+    tracing::info!(
+        audit = true,
+        action = "user.role",
+        role = %body.role,
+        subject_hash = %subject_hash(&sub),
+        "auth-core admin"
+    );
+    Ok(Json(json!({ "sub": sub, "role": body.role })).into_response())
 }
 
 /// `GET /admin/users/{sub}/passkeys` — `{"passkeys": <count>}`, the

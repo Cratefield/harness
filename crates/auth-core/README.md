@@ -19,13 +19,14 @@ access and erasure walk.
 | `GET /logout`, `POST /logout`, `POST /logout/confirm` | End the current session |
 | `POST /logout-all` | End every session the account holds |
 | `GET /sessions`, `DELETE /sessions/{id}` | List and end sessions |
-| `POST /token` | Access tokens, refresh tokens, reuse detection |
+| `POST /token` | Access tokens, an ID token on the code grant, refresh tokens, reuse detection |
 | `GET /jwks.json`, `GET /openid-configuration` | The JWKS and discovery document |
-| `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client |
+| `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client, and set its `roles_claim` (#912) |
 | `POST /admin/clients/{id}/rotate-secret` | Rotate a confidential client's secret, with an overlap window |
 | `POST /admin/users/import`, `GET /admin/users/by-external-id` | `fz auth import`'s server half |
 | `POST /admin/users/{sub}/disable`, `POST /admin/users/{sub}/enable` | Switch an account off and back on (#854) |
 | `GET /admin/users/{sub}/passkeys` | `{"passkeys": <count>}`: how many usable passkeys the account holds |
+| `POST /admin/users/{sub}/role` | Set an account's role: `owner`, `admin` or `member` (#912) |
 | `POST /sso/connections`, `GET /sso/connections` | An organization's own identity provider (#627) |
 | `POST /email/change` | `{ new_email, current_password? }`, signed in. Always `202`, always the same body |
 | `GET /email/confirm?token=…` | The page an email-change link opens. Never reads or spends the token |
@@ -34,6 +35,48 @@ access and erasure walk.
 Both `/email/*` routes refuse a cross-site request first
 (`403 auth/cross-site-request`, #439): moving the address is what every
 later reset mail points at.
+
+## Step-up re-authentication and roles (#912)
+
+`/authorize` honours the two OpenID Connect Core (section 3.1.2.1) requests
+that ask for a fresh sign-in:
+
+- `prompt=login` shows the chooser even with a live session. Only a
+  ceremony that completes after the request satisfies it: the request is
+  recorded on the account (`users.reauth_requested_at`) and the session the
+  browser holds must have been created strictly after that moment. A session
+  from before the request never does, and a request cannot make one.
+- `max_age=N` requires the last authentication to be at most N seconds old.
+  `max_age=0` always requires a ceremony. A session's creation time is its
+  last real authentication, and a refresh never touches it, so `auth_time`
+  and `max_age` do not move when a token is refreshed.
+- `prompt=none` never shows a page: it answers `login_required` when no
+  session is live or a ceremony is due.
+
+A malformed `prompt` or `max_age` (an unknown prompt value, `none` alongside
+another, a negative or non-numeric age) and a `nonce` over 512 bytes are
+refused as `invalid_request` to the registered URI, as the other parameter
+errors are. When there is no session the chooser's login is itself the
+ceremony, so `prompt` and `max_age` are not carried back with it.
+
+**Tokens.** The access token carries `auth_time` (epoch seconds) and `amr`
+beside `email` and `email_verified`. The code grant also answers an
+`id_token` (ES256, the same key as the access token) with `auth_time`,
+`amr`, `aud` and `sub`, and `nonce` when the request sent one. The refresh
+grant answers no ID token. `amr` values are the ones the login methods
+record: `passkey` with `user` (and `mfa` when the authenticator verified the
+user), `email`, `pwd`, `federated`, `sso`.
+
+**Roles.** `users.role` is `owner`, `admin` or `member` (every account starts
+as `member`), set by `POST /admin/users/{sub}/role` under the admin bearer
+token. A client gets a `roles` claim, `["owner"]` or the one role it has,
+only when it is registered with `roles_claim: true` (off by default). Nothing
+a client sends can set a role: the role is read from the account, never from
+the request. A role change reaches new tokens at once; a token already minted
+keeps its role until it expires, at most `ACCESS_TOKEN_SECS` later.
+
+Discovery advertises `prompt_values_supported` (`none`, `login`, `consent`,
+`select_account`) and the claims above in `claims_supported`.
 
 ## The email change (#648)
 
