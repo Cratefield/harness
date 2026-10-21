@@ -175,11 +175,10 @@ impl PoolRegistry {
     /// window. Called on each handout, so a busy deployment sweeps itself
     /// and an idle one costs nothing.
     fn evict_idle(&self, now: i64) -> Vec<Arc<CappedDb>> {
-        let idle_secs = i64::try_from(self.idle.as_secs())
-            .unwrap_or_else(|_| {
-                eprintln!("idle duration exceeds i64::MAX seconds, using max value");
-                i64::MAX
-            });
+        let idle_secs = i64::try_from(self.idle.as_secs()).unwrap_or_else(|_| {
+            eprintln!("idle duration exceeds i64::MAX seconds, using max value");
+            i64::MAX
+        });
         let cutoff = now.saturating_sub(idle_secs);
         let mut pools = self.pools.lock().expect("pool lock");
         let stale: Vec<String> = pools
