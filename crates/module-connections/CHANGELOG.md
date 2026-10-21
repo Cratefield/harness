@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4](https://github.com/Cratefield/harness/compare/cratefield-module-connections-v0.2.3...cratefield-module-connections-v0.2.4) - 2026-10-21
+
+### Other
+
+- updated the following local packages: cratefield-oauth-client
+
 ## [0.2.3](https://github.com/Cratefield/harness/compare/cratefield-module-connections-v0.2.2...cratefield-module-connections-v0.2.3) - 2026-10-19
 
 ### Other

@@ -43,6 +43,14 @@ const SUBJECT_TABLES: &[&str] = &[
     // Issue #854: the enable/disable audit trail, erased with the account
     // it names.
     "user_admin_audit",
+    // Issue #912: the role-change audit and the step-up transactions, both
+    // erased with the account they name.
+    "user_role_audit",
+    // Issue #914: recovery codes, in-app notices, accepted terms.
+    "recovery_codes",
+    "security_notices",
+    "terms_acceptances",
+    "step_up_transactions",
 ];
 
 /// The tables that hold a person and survive an erasure, with the reason
@@ -84,6 +92,7 @@ fn privacy_kit() -> TestHarness {
 /// One account with one of everything, written straight to the database: the
 /// point under test is what the declarations reach, not how the rows got
 /// there.
+#[allow(clippy::too_many_lines)]
 async fn seed(kit: &TestHarness, user: &str, email: &str) {
     let at = "2026-01-01T00:00:00Z";
     let rows: Vec<(&str, &str, Vec<sea_query::Value>)> = vec![
@@ -157,6 +166,43 @@ async fn seed(kit: &TestHarness, user: &str, email: &str) {
             "INSERT INTO user_admin_audit (id, user_id, action, at) \
              VALUES (?, ?, 'user.disable', ?)",
             vec![format!("audit-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "recovery_codes",
+            "INSERT INTO recovery_codes (id, user_id, code_hash, created_at) VALUES (?, ?, ?, ?)",
+            vec![
+                format!("rc-{user}").into(),
+                user.into(),
+                format!("hash-{user}").into(),
+                at.into(),
+            ],
+        ),
+        (
+            "security_notices",
+            "INSERT INTO security_notices (id, user_id, kind, detail, created_at) VALUES (?, ?, 'passkey_added', 'added', ?)",
+            vec![format!("sn-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "terms_acceptances",
+            "INSERT INTO terms_acceptances (id, user_id, terms_version, privacy_version, accepted_at) VALUES (?, ?, '1', '1', ?)",
+            vec![format!("ta-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "user_role_audit",
+            "INSERT INTO user_role_audit (id, user_id, role, at) VALUES (?, ?, 'admin', ?)",
+            vec![format!("role-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "step_up_transactions",
+            "INSERT INTO step_up_transactions (id, user_id, client_id, token_hash, created_at, \
+             expires_at) VALUES (?, ?, 'app', ?, ?, ?)",
+            vec![
+                format!("stu-{user}").into(),
+                user.into(),
+                format!("tx-digest-{user}").into(),
+                at.into(),
+                "2027-01-01T00:00:00Z".into(),
+            ],
         ),
     ];
     for (table, sql, values) in rows {

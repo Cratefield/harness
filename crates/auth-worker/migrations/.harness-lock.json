@@ -47,6 +47,30 @@
     "file": "0015_auth-core_0012_user_admin_audit.sql",
     "sha256": "145f63b11edeff12371b3ece7a2766e403f8709176fa9f6248996b85b1c05ecb"
   },
+  "auth-core/0013": {
+    "file": "0016_auth-core_0013_step_up.sql",
+    "sha256": "c6d6a81d4fb05bd17413d380f8cbf874fbb504e7ccd538565106572e1eb0f5db"
+  },
+  "auth-core/0014": {
+    "file": "0017_auth-core_0014_step_up_transactions.sql",
+    "sha256": "9d27665bf7d1fc5371bbbabf9bef04ffd32e20dae8e1c01187685f860461f7c9"
+  },
+  "auth-core/0015": {
+    "file": "0018_auth-core_0015_step_up_hardening.sql",
+    "sha256": "8876a0706771b531d2c2e8732308f30e39e9e08f80b0bdc939f8c50fd108c2fb"
+  },
+  "auth-core/0016": {
+    "file": "0019_auth-core_0016_step_up_acr_in_codes.sql",
+    "sha256": "bed220b22862c034c96476fa3eb7beea237784119d81c15f488db9741ff9bbda"
+  },
+  "auth-core/0017": {
+    "file": "0020_auth-core_0017_passkey_first_signup.sql",
+    "sha256": "1dc24e59c1dc23b8de25aa8d2286045ff31565bdf7d2c4d26b4abd68f7373ca5"
+  },
+  "auth-core/0018": {
+    "file": "0021_auth-core_0018_recovery_lookup.sql",
+    "sha256": "8535b855e7707ef31599fff5dba9e9b2ffcc43d7f74a5e59ec180d5a32ed8336"
+  },
   "auth-magic-link/0001": {
     "file": "0012_auth-magic-link_0001_send_cooldown.sql",
     "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"

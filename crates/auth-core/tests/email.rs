@@ -45,7 +45,68 @@ fn config() -> Arc<MapConfig> {
             "AUTH_CORE_MAIL_FROM".to_owned(),
             "auth@example.test".to_owned(),
         ),
+        // The magic link is offered, so an address change has its email
+        // ceremony (issue #912, third review).
+        (
+            "AUTH_CORE_LOGIN_METHODS".to_owned(),
+            "password,magic-link".to_owned(),
+        ),
     ]))
+}
+
+/// The config of a deployment that offers no magic link: an account with a
+/// password re-proves an address change with it.
+fn config_without_magic_link() -> Arc<MapConfig> {
+    Arc::new(MapConfig::from_pairs([
+        (
+            "AUTH_CORE_PUBLIC_BASE".to_owned(),
+            "https://auth.example.test".to_owned(),
+        ),
+        (
+            "AUTH_CORE_MAIL_FROM".to_owned(),
+            "auth@example.test".to_owned(),
+        ),
+        ("AUTH_CORE_LOGIN_METHODS".to_owned(), "password".to_owned()),
+    ]))
+}
+
+/// Without a magic link, the password is the way an address change re-proves
+/// the caller (issue #912, third review): the right password moves the
+/// address, a wrong one does not, and a session with no password (a
+/// federated-only account) has no way to change its address at all.
+#[test]
+fn without_a_magic_link_the_password_re_proves_an_address_change() {
+    pollster::block_on(async {
+        let kit = TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
+            ports.config = config_without_magic_link();
+        });
+        account(&kit, "ada", OLD, true).await;
+        account(&kit, "bob", "bob@example.test", false).await;
+        let ada = sign_in(&kit, "ada", 2 * HOUR).await;
+        let bob = sign_in(&kit, "bob", 2 * HOUR).await;
+        let wrong = change(
+            &kit,
+            &ada,
+            json!({ "new_email": FRESH, "current_password": "not it" }),
+        )
+        .await;
+        assert_eq!(wrong.status, StatusCode::FORBIDDEN);
+        let right = change(
+            &kit,
+            &ada,
+            json!({ "new_email": FRESH, "current_password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(right.status, StatusCode::ACCEPTED, "{}", right.text());
+
+        assert_eq!(
+            change(&kit, &bob, json!({ "new_email": "b@example.test" }))
+                .await
+                .status,
+            StatusCode::FORBIDDEN,
+            "no password, no magic link: no way to change the address"
+        );
+    });
 }
 
 fn kits() -> Vec<TestHarness> {
@@ -156,7 +217,8 @@ async fn sign_in(kit: &TestHarness, user_id: &str, secs_ago: i64) -> String {
             user_agent: None,
             presented_cookie: None,
             presented_session_id: None,
-            amr: &[],
+            // A passkey ceremony: what a step-up session carries (issue #912).
+            amr: &["passkey", "user"],
         },
     )
     .await
@@ -599,45 +661,59 @@ fn confirming_revokes_the_accounts_other_sessions() {
 }
 
 /// The one thing the address change must not be reachable on: a session nobody
-/// re-proved. With a password credential the caller can re-prove it; without
-/// one there is nothing to re-prove with, so only a recent session gets through.
+/// re-proved. A password is no longer a way back in. Only a passkey or email
+/// ceremony at most two minutes old, on an account whose passkeys and address
+/// have been quiet for a day, changes the address (issue #912, second review).
 #[test]
-fn an_old_session_needs_the_password_back() {
+fn an_old_session_or_a_password_does_not_change_the_address() {
     pollster::block_on(async {
         for kit in kits() {
             account(&kit, "ada", OLD, true).await;
             account(&kit, "bob", "bob@example.test", false).await;
-            let old_with_password = sign_in(&kit, "ada", 2 * HOUR).await;
-            let old_without = sign_in(&kit, "bob", 2 * HOUR).await;
-            let fresh = sign_in(&kit, "bob", 60).await;
+            let old = sign_in(&kit, "ada", 2 * HOUR).await;
 
-            let refused = change(&kit, &old_with_password, json!({ "new_email": FRESH })).await;
+            let refused = change(&kit, &old, json!({ "new_email": FRESH })).await;
             assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text());
             assert!(refused.slug().ends_with("reauthentication-required"));
 
-            let wrong = change(
-                &kit,
-                &old_with_password,
-                json!({ "new_email": FRESH, "current_password": "not it" }),
-            )
-            .await;
-            assert_eq!(wrong.status, refused.status);
-            assert_eq!(wrong.json()["type"], refused.json()["type"]);
-
+            // The password, right or wrong, is not an alternative any more.
             let right = change(
                 &kit,
-                &old_with_password,
+                &old,
                 json!({ "new_email": FRESH, "current_password": PASSWORD }),
             )
             .await;
-            assert_eq!(right.status, StatusCode::ACCEPTED, "{}", right.text());
+            assert_eq!(right.status, StatusCode::FORBIDDEN, "{}", right.text());
 
-            // No password credential to re-enter: recency is all there is.
+            // A recent session that came through a federated sign-in is not a
+            // step-up either.
+            let federated = {
+                let at_now = at(EPOCH);
+                issue(
+                    &*kit.db,
+                    &at_now,
+                    &cratefield_core::UlidIdGen,
+                    Login {
+                        user_id: "bob",
+                        ip: None,
+                        user_agent: None,
+                        presented_cookie: None,
+                        presented_session_id: None,
+                        amr: &["federated"],
+                    },
+                )
+                .await
+                .expect("session")
+                .value
+            };
             let want = json!({ "new_email": "b@example.test" });
             assert_eq!(
-                change(&kit, &old_without, want.clone()).await.status,
+                change(&kit, &federated, want.clone()).await.status,
                 StatusCode::FORBIDDEN
             );
+
+            // A passkey ceremony a minute ago does.
+            let fresh = sign_in(&kit, "bob", 60).await;
             assert_eq!(
                 change(&kit, &fresh, want).await.status,
                 StatusCode::ACCEPTED

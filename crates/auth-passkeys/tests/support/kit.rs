@@ -49,6 +49,9 @@ pub fn config_pairs() -> Vec<(String, String)> {
         ("AUTH_PASSKEYS_RP_ID".to_owned(), RP_ID.to_owned()),
         ("AUTH_PASSKEYS_ORIGINS".to_owned(), ORIGIN.to_owned()),
         ("AUTH_PASSKEYS_RP_NAME".to_owned(), "Acme".to_owned()),
+        // The terms a passkey-first sign-up accepts (issue #914).
+        ("AUTH_CORE_TERMS_VERSION".to_owned(), "2026-10".to_owned()),
+        ("AUTH_CORE_PRIVACY_VERSION".to_owned(), "2026-10".to_owned()),
     ]
 }
 
@@ -160,8 +163,12 @@ impl Kit {
         .expect("mark applies");
     }
 
-    /// A session cookie value for that account.
+    /// A session cookie value for that account. Signing in is the fresh
+    /// ceremony a passkey change needs, and a change makes the account's
+    /// passkeys count as no step-up for a day, so the clock moves past that
+    /// day first (issue #912, second review).
     pub async fn sign_in(&self, user_id: &str) -> String {
+        self.clock.advance_secs(24 * 60 * 60 + 1);
         issue(
             &*self.db,
             &*self.clock,
@@ -172,7 +179,7 @@ impl Kit {
                 user_agent: None,
                 presented_cookie: None,
                 presented_session_id: None,
-                amr: &["test"],
+                amr: &["passkey", "user"],
             },
         )
         .await

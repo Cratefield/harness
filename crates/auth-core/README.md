@@ -19,13 +19,14 @@ access and erasure walk.
 | `GET /logout`, `POST /logout`, `POST /logout/confirm` | End the current session |
 | `POST /logout-all` | End every session the account holds |
 | `GET /sessions`, `DELETE /sessions/{id}` | List and end sessions |
-| `POST /token` | Access tokens, refresh tokens, reuse detection |
+| `POST /token` | Access tokens, an ID token on the code grant, refresh tokens, reuse detection |
 | `GET /jwks.json`, `GET /openid-configuration` | The JWKS and discovery document |
-| `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client |
+| `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client, and set its `roles_claim` (#912) |
 | `POST /admin/clients/{id}/rotate-secret` | Rotate a confidential client's secret, with an overlap window |
 | `POST /admin/users/import`, `GET /admin/users/by-external-id` | `fz auth import`'s server half |
 | `POST /admin/users/{sub}/disable`, `POST /admin/users/{sub}/enable` | Switch an account off and back on (#854) |
 | `GET /admin/users/{sub}/passkeys` | `{"passkeys": <count>}`: how many usable passkeys the account holds |
+| `POST /admin/users/{sub}/role` | Set an account's role: `owner`, `admin` or `member`, audited (#912) |
 | `POST /sso/connections`, `GET /sso/connections` | An organization's own identity provider (#627) |
 | `POST /email/change` | `{ new_email, current_password? }`, signed in. Always `202`, always the same body |
 | `GET /email/confirm?token=…` | The page an email-change link opens. Never reads or spends the token |
@@ -34,6 +35,168 @@ access and erasure walk.
 Both `/email/*` routes refuse a cross-site request first
 (`403 auth/cross-site-request`, #439): moving the address is what every
 later reset mail points at.
+
+## Passkey-first sign-up without an email address (#914)
+
+An account can be made with a passkey alone. `POST /v1/auth-passkeys/signup/options`
+starts the ceremony (a discoverable credential, user verification required, the
+account id as the user handle); `POST /v1/auth-passkeys/signup/verify` completes
+it. No email is asked for. The request carries the caller's acceptance of the
+deployment's current terms and privacy versions (`AUTH_CORE_TERMS_VERSION`,
+`AUTH_CORE_PRIVACY_VERSION`); a mismatch is refused, and the accepted versions
+are recorded with the account. The answer is `201` with the account's `sub`,
+`recovery_codes` (ten, shown once) and a session cookie. Both steps are
+rate-limited per caller address and pass the captcha when one is configured.
+
+**Recovery codes.** Ten per set, shown once. A code is `LOOKUP-LOOKUP-SECRET-SECRET-SECRET-SECRET`: the first eight symbols are a public lookup that finds one row, the last sixteen are an 80-bit secret. Only a SHA-256 digest of a domain separator, the lookup and the secret is stored, so the unique lookup salts each row. A code is spent once. Regenerating (`POST /recovery/codes`) needs a passkey or email ceremony in the last two minutes and replaces the whole set. `POST /recovery/redeem` with `{"recovery_code"}` (no account id: the code names its account) signs the account in:
+
+- the session carries the `recovery` method. Its only use is enrolling a passkey (`/authorize` treats such a session as signed out, so a relying party never gets a code from it, and it cannot meet a step-up);
+- the redeem starts the 24-hour quiet period;
+- by default it signs the account's other sessions out (`sign_out_other_sessions`, default `true`; pass `false` to keep them);
+- a wrong, spent, unknown or foreign code, and a missing captcha, get one answer. A disabled account is refused before its code is spent. A redeem does one lookup and one hash whatever the code names, so timing does not show whether a code or account exists.
+
+Sign-up and recovery both require the captcha: with no captcha port they refuse every request, and boot logs an error when terms are configured without one.
+
+**Atomic sign-up.** The account, its passkey, the accepted terms and the recovery codes are written in one database batch: either all of them exist afterwards, or none does (a second sign-up with the same authenticator fails on its passkey and leaves nothing). The session is issued after that batch.
+
+**Notices.** Every passkey added or removed, recovery code used and set
+replaced is recorded in the app: `GET /v1/auth-core/notices` lists them for the
+signed-in account, and `POST /v1/auth-core/notices/{id}/read` marks one read. An
+account with an address is also mailed.
+
+**Relying parties: the email claim may be absent.** An access or ID token of an
+account with no address has no `email` or `email_verified` claim. Identify the
+account by `sub` everywhere, and treat `email` as optional. A passkey-only account
+steps up and changes its account on a passkey ceremony alone, exactly as an
+account with an address does.
+
+## Step-up re-authentication and roles (#912)
+
+`/authorize` honours the two OpenID Connect Core (section 3.1.2.1) requests
+that ask for a fresh sign-in:
+
+- `prompt=login` shows the chooser even with a live session, and `max_age=0`
+  does the same. Each makes a **step-up transaction**: a single-use record
+  bound to the account and the client, valid for ten minutes, whose value
+  the chooser carries through the login as `step_up`. A session satisfies
+  the demand only if a passkey or an email link created it after the
+  transaction began, no more than 120 seconds before the request returns,
+  and only once: the check that accepts it spends the transaction. A
+  session from before the demand, a later unrelated login, a federated or
+  SSO sign-in, and a password sign-in do not satisfy it. Federated and SSO
+  sign-ins are not forwarded to the upstream IdP for a step-up; the chooser
+  is shown instead, so the person can use a passkey or an email link.
+- `max_age=N` (N > 0) is an age check against the session's creation. It
+  records nothing, so a failed check sends the person to the chooser and
+  leaves no demand behind.
+- `prompt=none` never shows a page: it answers `login_required` when no
+  session is live or a step-up is due. It records nothing.
+
+A malformed `prompt` or `max_age` (an unknown prompt value, `none` alongside
+another, a negative or non-numeric age) and a `nonce` over 512 bytes are
+refused as `invalid_request` to the registered URI, as the other parameter
+errors are. Without a session the chooser's login is itself the ceremony,
+so `prompt` and `max_age` are not carried back with it.
+
+**Tokens.** The access token (`typ: at+jwt`) carries `auth_time` (epoch
+seconds) and `amr` beside `email` and `email_verified`. A request with
+`scope` including `openid` also gets an `id_token` (`typ: JWT`, ES256, the
+same key) with `iss`, `sub`, `aud`, `azp`, `sid`, `auth_time`, `amr`,
+`nonce` when the request sent one, and `roles` when the client asks for
+them. A request without `openid` gets no ID token. The refresh grant never
+answers an ID token. `amr` values are the ones the login methods record:
+`passkey` with `user` (and `mfa` when the authenticator verified the user),
+`email`, `pwd`, `federated`, `sso`. Only `passkey` and `email` satisfy a
+step-up.
+
+**Demands made before anyone is signed in.** With no session, `prompt=login`
+and `max_age=0` still make a transaction. It is bound to this browser by the
+`__Host-step-up` cookie the chooser sets (`HttpOnly`, ten minutes), and to the
+account whose ceremony answers it. A federated or SSO sign-in cannot answer
+it. A `login_hint` or a named connection never routes a step-up to the IdP.
+
+**What one ceremony satisfies.** One fresh passkey or email ceremony satisfies
+every transaction its account holds, one at a time: each request spends the
+transaction it presents, and the others stay open until used or expired (at
+most twenty open per account; the oldest are dropped). Spent and expired rows
+are purged when the next demand is made.
+
+**Timing.** The ceremony must begin after the demand, to the millisecond, and
+be at most two minutes old when the request returns.
+
+**Third review, what changed.** The `acr` a spent step-up earns is carried by
+the authorization code that spent it, never by the session: a refresh, or
+another client's code, does not carry it. An anonymous demand is
+rate-limited per caller address, and the rate limiter is a required port: a
+deployment without one does not start. Anonymous demands are capped at 1000
+open per client, and past the cap the oldest is evicted. A `login_hint`
+naming an account binds an anonymous demand to that account, so another
+account's ceremony cannot answer it. Such demands are counted apart from the
+account's signed-in demands, at most five open per account (the new one is
+refused past that, `temporarily_unavailable`), and they never evict a
+signed-in one. A browser's earlier anonymous demand for the same account is
+replaced. A relying party must still compare `sub` with the account it meant
+(demands made without a `login_hint` have no account until the ceremony that
+answers them). An account's first passkey needs a sign-in of any method within two
+minutes. It is exempt from the quiet period when the enrolling session was a
+passkey or email ceremony; when it was a password or federated sign-in the
+enrolment is a change, so the passkey signs in at once but cannot satisfy a
+step-up for a day, and the notice goes out; a later passkey needs a passkey
+or email ceremony. Removing a passkey starts no quiet period. Where the
+deployment offers no magic link, an address change re-proves with the
+password. An account with no address (sign-up without email, #914) steps up
+and enrols passkeys on a passkey ceremony alone; a notice that cannot be
+mailed is logged, and an in-app record is the follow-up in #914.
+
+**Account changes.** Adding or removing a passkey, and changing the address,
+need a passkey or email ceremony at most two minutes old
+(`require_recent_ceremony`). A password is no longer a way to change the
+address. Every passkey change and address change moves the account's
+`security_changed_at`. For 24 hours after that, the account's passkey and
+email ceremonies do not satisfy a step-up or an account change, so a session
+that enrolled a credential cannot use it. The address is told of each passkey
+change (`auth-core/security-notice`), and the old address is told of each
+address change. Because the rule is per account, not per credential, a second
+passkey cannot be added on the same day as the first.
+
+**`max_age=N` is age only.** It implies no authentication method, so a
+federated sign-in can meet it. A caller that needs a passkey or an email
+ceremony uses `prompt=login`, and an approval gate checks `amr` as well (see
+`cratefield-auth-client`'s `stepped_up_within`).
+
+**Roles.** `users.role` is `owner`, `admin` or `member` (every account starts
+as `member`), set by `POST /admin/users/{sub}/role` under the admin bearer
+token and audited in `user_role_audit`. A client gets a `roles` claim,
+`["owner"]` or the one role it has, only when it is registered with
+`roles_claim: true` (off by default). A role that cannot be read fails the
+token request rather than being guessed. Nothing a client sends can set a
+role: the role is read from the account, never from the request. A role
+change reaches new tokens at once; a token already minted keeps its role
+until it expires, at most `ACCESS_TOKEN_SECS` later.
+
+Discovery advertises `prompt_values_supported` (`none`, `login`, `consent`,
+`select_account`), `scopes_supported` (`openid`), and the claims above in
+`claims_supported`.
+
+Relying parties must check freshness themselves: `cratefield-auth-client`
+exposes `authenticated_within`.
+
+**Downstream gates must use `stepped_up_within`.** Payments, signatures and
+other irreversible approvals check `stepped_up_within(secs, now)` in
+`cratefield-auth-client`, not `authenticated_within`. It requires the `acr`
+the code that spent a step-up transaction carried, a passkey or email `amr`,
+and a recent `auth_time`. `authenticated_within` alone accepts any recent
+sign-in.
+
+**Accepted residual.** On an account with no passkey, a fresh email session
+(or a password-only session, which enrolls a passkey and is notified as a
+change) can enrol its first passkey. A session created by an email ceremony
+in the last two minutes is enough, and the enrolment is exempt from the quiet
+period by design, so the passkey can satisfy a step-up at once. The account's
+owner is notified on every passkey enrolment that is mailed, and a
+password-only or federated enrolment starts the 24-hour quiet period. A
+passkey-only account with no address gets no notice (see #914). Accepted for
+#913; #914 adds an in-app notice record for the case without an address.
 
 ## The email change (#648)
 

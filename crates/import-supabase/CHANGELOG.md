@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/Cratefield/harness/compare/cratefield-import-supabase-v0.2.2...cratefield-import-supabase-v0.2.3) - 2026-10-21
+
+### Other
+
+- patch rustls / rustls-webpki / webpki-roots advisories ([#908](https://github.com/Cratefield/harness/pull/908))
+
 ## [0.2.2](https://github.com/Cratefield/harness/compare/cratefield-import-supabase-v0.2.1...cratefield-import-supabase-v0.2.2) - 2026-10-19
 
 ### Other
