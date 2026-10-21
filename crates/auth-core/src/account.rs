@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cratefield_core::{
     Clock, Config, Database, DbError, IdGen, Json, ModuleConfig, ModuleContext, Problem, Scope,
-    constant_time_eq,
+    Statement, constant_time_eq,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -188,16 +188,70 @@ fn draw_codes() -> Result<Vec<DrawnCode>, DbError> {
     Ok(codes)
 }
 
+/// Domain separator for a stored code digest. A digest from any other use of
+/// SHA-256 in this service cannot be mistaken for one of these.
+const CODE_DIGEST_DOMAIN: &str = "cratefield-recovery-v1";
+
+/// The digest a code's secret is stored as: SHA-256 over a domain separator, the
+/// public lookup id and the secret. The lookup id is unique per row, so it acts
+/// as a per-row salt: two accounts with the same secret store different digests.
+fn code_digest(lookup: &str, secret: &str) -> String {
+    sha256_hex(format!("{CODE_DIGEST_DOMAIN}\0{lookup}\0{secret}").as_bytes())
+}
+
 /// The stored row for a drawn code.
 fn code_row(id: String, user_id: &str, code: &DrawnCode, now: &str) -> RecoveryCodeRow {
     RecoveryCodeRow {
         id,
         lookup_id: code.lookup.clone(),
         user_id: user_id.to_owned(),
-        code_hash: sha256_hex(code.secret.as_bytes()),
+        code_hash: code_digest(&code.lookup, &code.secret),
         created_at: now.to_owned(),
         used_at: None,
     }
+}
+
+/// How many fresh draws a write makes before it gives up: a lookup id that is
+/// already taken, or a batch that loses a race, is redrawn, never a 500.
+const DRAW_ATTEMPTS: usize = 3;
+
+/// Writes one batch built from a fresh draw of the codes, redrawing up to
+/// `DRAW_ATTEMPTS` times when the batch fails (a lookup id that another row
+/// already holds, or a concurrent write). Returns the codes as shown, once.
+async fn write_with_fresh_codes(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    user_id: &str,
+    draw: fn() -> Result<Vec<DrawnCode>, DbError>,
+    prefix: Vec<Statement>,
+    replace_existing: bool,
+) -> Result<Vec<String>, DbError> {
+    let now = crate::sessions::iso(clock.now());
+    let mut last = None;
+    for _ in 0..DRAW_ATTEMPTS {
+        let drawn = draw()?;
+        let mut statements = prefix.clone();
+        if replace_existing {
+            statements.push(store::delete_recovery_codes_statement(user_id));
+        }
+        for code in &drawn {
+            statements.push(store::insert_recovery_code_statement(&code_row(
+                id_gen.ulid(),
+                user_id,
+                code,
+                &now,
+            )));
+        }
+        match db.batch_atomic(&statements).await {
+            Ok(()) => return Ok(drawn.into_iter().map(|code| code.display).collect()),
+            Err(err) => {
+                tracing::warn!(error = %err, "a recovery-code batch was redrawn");
+                last = Some(err);
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| DbError::Batch("no recovery-code draw succeeded".to_owned())))
 }
 
 /// Replaces the account's recovery codes with a fresh set, and returns the
@@ -205,26 +259,14 @@ fn code_row(id: String, user_id: &str, code: &DrawnCode, now: &str) -> RecoveryC
 ///
 /// # Errors
 ///
-/// [`DbError`] when drawing or writing the codes fails.
+/// [`DbError`] when drawing or writing the codes keeps failing.
 pub async fn issue_recovery_codes(
     db: &dyn Database,
     clock: &dyn Clock,
     id_gen: &dyn IdGen,
     user_id: &str,
 ) -> Result<Vec<String>, DbError> {
-    let drawn = draw_codes()?;
-    let now = crate::sessions::iso(clock.now());
-    let mut statements = vec![store::delete_recovery_codes_statement(user_id)];
-    for code in &drawn {
-        statements.push(store::insert_recovery_code_statement(&code_row(
-            id_gen.ulid(),
-            user_id,
-            code,
-            &now,
-        )));
-    }
-    db.batch_atomic(&statements).await?;
-    Ok(drawn.into_iter().map(|code| code.display).collect())
+    write_with_fresh_codes(db, clock, id_gen, user_id, draw_codes, Vec::new(), true).await
 }
 
 /// Creates a passkey-first account in one atomic batch: the user row, the
@@ -235,7 +277,7 @@ pub async fn issue_recovery_codes(
 ///
 /// # Errors
 ///
-/// [`DbError`] when the batch fails.
+/// [`DbError`] when the batch keeps failing.
 pub async fn create_passkey_account(
     db: &dyn Database,
     clock: &dyn Clock,
@@ -244,33 +286,20 @@ pub async fn create_passkey_account(
     credential: &crate::store::CredentialRow,
     terms: (&str, &str),
 ) -> Result<Vec<String>, DbError> {
-    let drawn = draw_codes()?;
     let now = crate::sessions::iso(clock.now());
-    let mut statements = vec![
+    let terms_id = id_gen.ulid();
+    let prefix = vec![
         store::insert_user_statement(user),
         store::insert_credential_statement(credential),
-        store::insert_terms_acceptance_statement(&id_gen.ulid(), &user.id, terms.0, terms.1, &now),
+        store::insert_terms_acceptance_statement(&terms_id, &user.id, terms.0, terms.1, &now),
     ];
-    for code in &drawn {
-        statements.push(store::insert_recovery_code_statement(&code_row(
-            id_gen.ulid(),
-            &user.id,
-            code,
-            &now,
-        )));
-    }
-    db.batch_atomic(&statements).await?;
-    Ok(drawn.into_iter().map(|code| code.display).collect())
+    write_with_fresh_codes(db, clock, id_gen, &user.id, draw_codes, prefix, false).await
 }
 
-/// Spends the code that `presented` names, if it names one that belongs to
-/// `sub` and has not been spent, and returns whether it was spent. The work is
-/// the same for every input: one lookup, one hash, one compare.
-async fn spend_code(
-    db: &dyn Database,
-    clock: &dyn Clock,
-    presented: &str,
-) -> Result<Option<RecoveryCodeRow>, Problem> {
+/// The stored code a presented string names, if it is well formed and the
+/// lookup finds a row. Does no spending, so the caller can check the account
+/// first. Always does the same reads and the same hash, whatever the input.
+async fn find_code(db: &dyn Database, presented: &str) -> Result<Option<RecoveryCodeRow>, Problem> {
     let (lookup, secret) = split_code(presented);
     let row = store::recovery_code_by_lookup(db, &lookup)
         .await
@@ -278,20 +307,29 @@ async fn spend_code(
     let expected = row
         .as_ref()
         .map_or_else(dummy_hash, |row| row.code_hash.clone());
-    let presented_hash = sha256_hex(secret.as_bytes());
-    let matches = constant_time_eq(presented_hash.as_bytes(), expected.as_bytes());
+    let presented_digest = code_digest(&lookup, &secret);
+    let matches = constant_time_eq(presented_digest.as_bytes(), expected.as_bytes());
     let Some(row) = row else {
         return Ok(None);
     };
     if !matches || row.used_at.is_some() || secret.len() != SECRET_SYMBOLS {
         return Ok(None);
     }
+    Ok(Some(row))
+}
+
+/// Spends a code a `find_code` matched. Of two requests racing on one code,
+/// exactly one spends it.
+async fn spend_found(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    row: &RecoveryCodeRow,
+) -> Result<bool, Problem> {
     let now = crate::sessions::iso(clock.now());
-    // Of two requests racing on one code, exactly one spends it.
     let spent = store::spend_recovery_code(db, &row.id, &now)
         .await
         .map_err(|_| Problem::internal())?;
-    Ok((spent == 1).then_some(row))
+    Ok(spent == 1)
 }
 
 /// Records an in-app security notice for the account.
@@ -381,14 +419,23 @@ async fn redeem(
     if !captcha_passes(&state.ctx, body.captcha_token.as_deref(), &headers).await {
         return Err(refused());
     }
-    let Some(code) = spend_code(db, clock, &body.recovery_code).await? else {
-        return Err(refused());
+    // The account is checked before the code is spent, so a disabled account's
+    // code is not burned. Every path does the same reads (issue #914, review).
+    let found = find_code(db, &body.recovery_code).await?;
+    let owner = match &found {
+        Some(row) => row.user_id.clone(),
+        None => String::new(),
     };
-    let user = store::user_by_id(db, &code.user_id)
+    let user = store::user_by_id(db, &owner)
         .await
         .map_err(|_| internal(&scope))?
-        .filter(|user| user.status == STATUS_ACTIVE)
-        .ok_or_else(refused)?;
+        .filter(|user| user.status == STATUS_ACTIVE);
+    let Some((row, user)) = found.zip(user) else {
+        return Err(refused());
+    };
+    if !spend_found(db, clock, &row).await? {
+        return Err(refused());
+    }
     let now = crate::sessions::iso(clock.now());
     let signed_out = if body.sign_out_other_sessions {
         let sessions = store::revoke_all_sessions(db, &user.id, &now)
@@ -513,4 +560,86 @@ pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
         .route("/recovery/codes", post(regenerate))
         .route("/notices", get(notices))
         .route("/notices/{id}/read", post(mark_read))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cratefield_testing::{FixedClock, TestHarness};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use time::OffsetDateTime;
+
+    static DRAWS: AtomicUsize = AtomicUsize::new(0);
+
+    /// The first draw collides with a lookup id another row already holds; every
+    /// later draw is fresh.
+    fn colliding_first_draw() -> Result<Vec<DrawnCode>, DbError> {
+        let mut codes = draw_codes()?;
+        if DRAWS.fetch_add(1, Ordering::SeqCst) == 0 {
+            codes[0].lookup = "ZZZZZZZZ".to_owned();
+        }
+        Ok(codes)
+    }
+
+    fn user(id: &str) -> crate::store::UserRow {
+        crate::store::UserRow {
+            id: id.to_owned(),
+            display_name: None,
+            primary_email: None,
+            primary_email_verified: false,
+            locale: None,
+            status: STATUS_ACTIVE.to_owned(),
+            created_at: "2026-10-01T00:00:00Z".to_owned(),
+            updated_at: "2026-10-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    /// Issue #914 (review): a lookup id already taken makes the batch fail; the
+    /// write redraws and succeeds, instead of failing the request.
+    #[pollster::test]
+    async fn a_colliding_lookup_is_redrawn_not_a_failure() {
+        let kit = TestHarness::with_ports(vec![Box::new(crate::AuthCore::new())], |_| {});
+        let clock = FixedClock(OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("epoch"));
+        let db: &dyn Database = &*kit.db;
+        crate::store::insert_user(db, &user("ada"))
+            .await
+            .expect("ada");
+        crate::store::insert_user(db, &user("other"))
+            .await
+            .expect("other");
+        // Another account already holds the lookup id the first draw will take.
+        db.batch_atomic(&[crate::store::insert_recovery_code_statement(
+            &RecoveryCodeRow {
+                id: "taken".to_owned(),
+                lookup_id: "ZZZZZZZZ".to_owned(),
+                user_id: "other".to_owned(),
+                code_hash: "x".repeat(64),
+                created_at: "2026-10-01T00:00:00Z".to_owned(),
+                used_at: None,
+            },
+        )])
+        .await
+        .expect("seeded");
+        DRAWS.store(0, Ordering::SeqCst);
+        let shown = write_with_fresh_codes(
+            db,
+            &clock,
+            &cratefield_core::UlidIdGen,
+            "ada",
+            colliding_first_draw,
+            Vec::new(),
+            true,
+        )
+        .await
+        .expect("the write succeeds on a redraw");
+        assert_eq!(shown.len(), RECOVERY_CODE_COUNT);
+        assert_eq!(DRAWS.load(Ordering::SeqCst), 2, "one collision, one redraw");
+        let rows: cratefield_core::Rows = db
+            .query(&Statement::new(
+                "SELECT COUNT(*) AS n FROM recovery_codes WHERE user_id = 'ada'".to_owned(),
+            ))
+            .await
+            .expect("count");
+        assert_eq!(rows.rows[0].get::<i64>("n"), Some(10));
+    }
 }

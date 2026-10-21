@@ -48,12 +48,12 @@ are recorded with the account. The answer is `201` with the account's `sub`,
 `recovery_codes` (ten, shown once) and a session cookie. Both steps are
 rate-limited per caller address and pass the captcha when one is configured.
 
-**Recovery codes.** Ten per set, shown once. A code is `LOOKUP-LOOKUP-SECRET-SECRET-SECRET-SECRET`: the first eight symbols are a public lookup that finds one row, the last sixteen are an 80-bit secret stored only as its SHA-256. A code is spent once. Regenerating (`POST /recovery/codes`) needs a passkey or email ceremony in the last two minutes and replaces the whole set. `POST /recovery/redeem` with `{"recovery_code"}` (no account id: the code names its account) signs the account in:
+**Recovery codes.** Ten per set, shown once. A code is `LOOKUP-LOOKUP-SECRET-SECRET-SECRET-SECRET`: the first eight symbols are a public lookup that finds one row, the last sixteen are an 80-bit secret. Only a SHA-256 digest of a domain separator, the lookup and the secret is stored, so the unique lookup salts each row. A code is spent once. Regenerating (`POST /recovery/codes`) needs a passkey or email ceremony in the last two minutes and replaces the whole set. `POST /recovery/redeem` with `{"recovery_code"}` (no account id: the code names its account) signs the account in:
 
 - the session carries the `recovery` method. Its only use is enrolling a passkey (`/authorize` treats such a session as signed out, so a relying party never gets a code from it, and it cannot meet a step-up);
 - the redeem starts the 24-hour quiet period;
 - by default it signs the account's other sessions out (`sign_out_other_sessions`, default `true`; pass `false` to keep them);
-- a wrong, spent, unknown or foreign code, and a missing captcha, get one answer. A redeem does one lookup and one hash whatever the code names, so timing does not show whether a code or account exists.
+- a wrong, spent, unknown or foreign code, and a missing captcha, get one answer. A disabled account is refused before its code is spent. A redeem does one lookup and one hash whatever the code names, so timing does not show whether a code or account exists.
 
 Sign-up and recovery both require the captcha: with no captcha port they refuse every request, and boot logs an error when terms are configured without one.
 

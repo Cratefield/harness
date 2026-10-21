@@ -673,3 +673,62 @@ async fn an_unknown_code_costs_what_a_wrong_one_costs() {
     let ratio = if a > b { a / b } else { b / a };
     assert!(ratio < 5.0, "medians {a}s and {b}s differ by {ratio}x");
 }
+
+/// Issue #914 (review): a disabled account's code is refused and not spent, so
+/// it still works once the account is enabled again. The refusal is the same one
+/// a wrong code gets.
+#[test]
+fn a_disabled_account_does_not_burn_its_recovery_code() {
+    pollster::block_on(async {
+        for kit in kits() {
+            seed(&kit, "ada").await;
+            let codes = fresh_codes(&kit, "ada").await;
+            kit.db
+                .execute(&Statement::new(
+                    "UPDATE users SET status = 'disabled' WHERE id = 'ada'".to_owned(),
+                ))
+                .await
+                .expect("disabled");
+            let (status, body, _) = send(
+                &kit,
+                Method::POST,
+                "/recovery/redeem",
+                None,
+                Some(json!({ "recovery_code": codes[8] })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+            let (_, wrong, _) = send(
+                &kit,
+                Method::POST,
+                "/recovery/redeem",
+                None,
+                Some(json!({ "recovery_code": "ZZZZZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ" })),
+            )
+            .await;
+            assert_eq!(
+                body["type"], wrong["type"],
+                "the same answer as a wrong code"
+            );
+            kit.db
+                .execute(&Statement::new(
+                    "UPDATE users SET status = 'active' WHERE id = 'ada'".to_owned(),
+                ))
+                .await
+                .expect("enabled");
+            let (status, _, _) = send(
+                &kit,
+                Method::POST,
+                "/recovery/redeem",
+                None,
+                Some(json!({ "recovery_code": codes[8] })),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "the code was not spent while disabled"
+            );
+        }
+    });
+}
