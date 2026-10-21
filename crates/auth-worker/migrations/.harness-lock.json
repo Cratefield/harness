@@ -63,6 +63,14 @@
     "file": "0019_auth-core_0016_step_up_acr_in_codes.sql",
     "sha256": "bed220b22862c034c96476fa3eb7beea237784119d81c15f488db9741ff9bbda"
   },
+  "auth-core/0017": {
+    "file": "0020_auth-core_0017_passkey_first_signup.sql",
+    "sha256": "1dc24e59c1dc23b8de25aa8d2286045ff31565bdf7d2c4d26b4abd68f7373ca5"
+  },
+  "auth-core/0018": {
+    "file": "0021_auth-core_0018_recovery_lookup.sql",
+    "sha256": "8535b855e7707ef31599fff5dba9e9b2ffcc43d7f74a5e59ec180d5a32ed8336"
+  },
   "auth-magic-link/0001": {
     "file": "0012_auth-magic-link_0001_send_cooldown.sql",
     "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"

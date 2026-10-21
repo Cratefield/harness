@@ -976,6 +976,46 @@ pub async fn session_proves_by_passkey_or_email(db: &dyn Database, session_id: &
     }
 }
 
+/// The gate on enrolling a passkey on an account that already has one (issue
+/// #914). A recovery sign-in may enrol one, fresh, without the quiet check:
+/// that is what the recovery code is for, and the enrolment itself starts the
+/// quiet period. Anything else needs `require_recent_ceremony`.
+///
+/// # Errors
+///
+/// [`Problem`] as [`require_recent_ceremony`] answers.
+pub async fn require_enrolment_ceremony(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    session_id: &str,
+    user_id: &str,
+) -> Result<(), Problem> {
+    let recovered = match store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(row) => token_endpoint::amr_of(&row).iter().any(|m| m == "recovery"),
+        None => false,
+    };
+    if recovered {
+        return require_recent_session(db, clock, session_id).await;
+    }
+    require_recent_ceremony(db, clock, session_id, user_id).await
+}
+
+/// Whether the session was signed in by a recovery code and nothing else. Such
+/// a session is for enrolling a passkey only (issue #914).
+async fn recovery_only(db: &dyn Database, session_id: &str) -> Result<bool, Problem> {
+    let Some(row) = store::session_by_id(db, session_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Ok(false);
+    };
+    let methods = token_endpoint::amr_of(&row);
+    Ok(!methods.is_empty() && methods.iter().all(|method| method == "recovery"))
+}
+
 /// Records that the account's passkeys or address just changed, so that the
 /// next 24 hours' ceremonies do not count as a step-up.
 ///
@@ -1177,6 +1217,19 @@ async fn authorize(
         Some(cookie) => sessions::validate(&*db, &*clock, &cookie)
             .await
             .map_err(|_| Problem::internal())?,
+        None => None,
+    };
+    // A recovery sign-in is not a session a relying party can use: it can enrol
+    // a passkey and nothing else, so for this request the person is signed out
+    // (issue #914, security review).
+    let session = match session {
+        Some(live) => {
+            if recovery_only(&*db, &live.id).await? {
+                None
+            } else {
+                Some(live)
+            }
+        }
         None => None,
     };
 

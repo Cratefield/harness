@@ -45,7 +45,9 @@ human-readable page at each `<public_url>/problems/<slug>`.
 | `auth/password-token-refused` | 400 | That link is no longer valid | `cratefield-auth-password` | Missing, expired, already used, or never issued |
 | `auth/password-unsuitable` | 400 | That password cannot be used | `cratefield-auth-password` | Too short, too long, or found in a public breach corpus |
 | `auth/reauthentication-required` | 403 | Sign in again to change this | `cratefield-auth-core` | The session is too old and the password does not match, not distinguished |
+| `auth/recovery-refused` | 401 | Recovery refused | `cratefield-auth-core` | The recovery code did not match a live code |
 | `auth/session-invalid` | 401 | A valid session is required | `cratefield-auth-core` | Missing, unknown, revoked or expired session — not distinguished |
+| `auth/signup-refused` | 403 | Sign-up refused | `cratefield-auth-passkeys` | The sign-up could not be completed |
 | `auth/sso-domain-claimed` | 409 | That email domain is already in use | `cratefield-auth-core` | An email domain routes to at most one active SSO connection per client |
 | `auth/sso-unauthorized` | 401 | That SSO request is not authorized | `cratefield-auth-core` | The admin API takes HTTP Basic with a confidential client's id and secret |
 | `auth/sso-unconfigured` | 503 | SSO connections are not configured on this deployment | `cratefield-auth-core` | AUTH_CORE_SSO_TOKEN_KEY is missing or unusable |

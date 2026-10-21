@@ -21,6 +21,9 @@ use sha2::{Digest, Sha256};
 /// a login.
 pub(crate) const PURPOSE_REGISTER: &str = "register";
 pub(crate) const PURPOSE_LOGIN: &str = "login";
+/// A sign-up challenge: the account id it names is the one the new credential
+/// is stored under (issue #914).
+pub(crate) const PURPOSE_SIGNUP: &str = "signup";
 
 /// 32 bytes, the size the spec recommends and every browser expects.
 const CHALLENGE_BYTES: usize = 32;

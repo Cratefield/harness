@@ -33,6 +33,7 @@ mod login;
 mod prf;
 mod register;
 mod request;
+mod signup;
 pub mod webauthn;
 
 use cratefield_core::{
@@ -330,7 +331,8 @@ impl Module for Passkeys {
     /// configurable layer rather than the only thing between the endpoint
     /// and an enumeration oracle.
     fn optional(&self) -> &'static [Port] {
-        &[Port::RateLimiter]
+        // The rate limiter and the captcha guard anonymous sign-up (issue #914).
+        &[Port::RateLimiter, Port::Captcha]
     }
 
     /// Two tables of the module's own: the challenge budget ledger behind
@@ -452,6 +454,7 @@ impl Module for Passkeys {
             rp,
         });
         register::router()
+            .merge(signup::router())
             .merge(login::router())
             .merge(add::router())
             .merge(prf::router())

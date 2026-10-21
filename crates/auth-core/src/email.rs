@@ -738,29 +738,36 @@ async fn prove_password(
     }
 }
 
-/// Tells the account's address that a passkey was added or removed (issue
-/// #912, second review). Every passkey change is announced, whichever session
-/// made it. A deployment that cannot mail, or an account with no address,
-/// sends nothing and says so in the log.
-pub async fn notify_passkey_change(ctx: &ModuleContext, user_id: &str, what: &str) {
-    let (Some(db), Some(clock), Some(mailer)) = (
+/// Tells the account that something about its sign-in changed (issue #914).
+/// The notice is always recorded in the app, where the signed-in person reads
+/// it; it is also mailed when the account has an address. An account with no
+/// address (sign-up without email) has no mail to send, and the in-app record
+/// is what it hears of the change through. Failures are logged, never raised:
+/// the change itself has already happened.
+pub async fn notify_account(ctx: &ModuleContext, user_id: &str, kind: &str, sentence: &str) {
+    let (Some(db), Some(clock), Some(id_gen)) = (
         ctx.ports.db.as_deref(),
         ctx.ports.clock.as_deref(),
-        ctx.ports.mailer.as_deref(),
+        ctx.ports.id_gen.as_deref(),
     ) else {
+        return;
+    };
+    if let Err(err) =
+        crate::account::record_notice(db, clock, id_gen, user_id, kind, sentence).await
+    {
+        tracing::error!(error = %err, kind, "could not record a security notice");
+    }
+    let Some(mailer) = ctx.ports.mailer.as_deref() else {
         return;
     };
     let settings = MailSettings::from_config(&*ctx.config);
     let Some((_, mail_from)) = settings.mail_ready() else {
-        tracing::warn!("no PUBLIC_BASE/MAIL_FROM configured; no passkey-change notice was sent");
+        tracing::warn!("no PUBLIC_BASE/MAIL_FROM configured; no security notice was mailed");
         return;
     };
     let Ok(Some(user)) = store::user_by_id(db, user_id).await else {
         return;
     };
-    // An account with no address (sign-up without email, issue #914) has nobody
-    // to mail. The change still stands, and the log records that no notice went
-    // out. An in-app notice record is the follow-up for these accounts.
     let Some(address) = user
         .primary_email
         .clone()
@@ -768,8 +775,8 @@ pub async fn notify_passkey_change(ctx: &ModuleContext, user_id: &str, what: &st
     else {
         tracing::info!(
             subject_hash = %cratefield_core::subject_hash(user_id),
-            change = what,
-            "an account with no address changed its passkeys; no notice was mailed"
+            kind,
+            "an account with no address has a security notice in the app only"
         );
         return;
     };
@@ -782,13 +789,25 @@ pub async fn notify_passkey_change(ctx: &ModuleContext, user_id: &str, what: &st
         &SECURITY_DEFAULT,
         &SecurityMail {
             venture: brand.name,
-            what: what.to_owned(),
+            what: sentence.to_owned(),
             contact: brand.support_email.unwrap_or_default(),
         },
         (&locale, &address, mail_from),
-        &format!("security-notice-{user_id}-{now}-{what}"),
+        &format!("security-notice-{user_id}-{now}-{kind}"),
     )
     .await;
+}
+
+/// Tells the account that a passkey was added or removed (issues #913, #914).
+pub async fn notify_passkey_change(ctx: &ModuleContext, user_id: &str, what: &str) {
+    let (kind, sentence) = match what {
+        "added" => ("passkey_added", "A passkey was added to your account."),
+        _ => (
+            "passkey_removed",
+            "A passkey was removed from your account.",
+        ),
+    };
+    notify_account(ctx, user_id, kind, sentence).await;
 }
 
 /// Renders one message through the venture's registry and sends it, logging
@@ -998,8 +1017,8 @@ impl Template for EmailChangeTemplate {
             let data: SecurityMail = parse(self.id, data)?;
             let way_out = if data.contact.is_empty() {
                 format!(
-                    "If you do not recognise this, sign in to {venture} and review the passkeys \
-                     on your account, or ask whoever administers this service to help."
+                    "If you do not recognise this, sign in to {venture} and review your \
+                     passkeys and recovery codes, or ask whoever administers this service to help."
                 )
             } else {
                 format!(
@@ -1008,21 +1027,13 @@ impl Template for EmailChangeTemplate {
                 )
             };
             Message::new(
-                format!("A passkey was {} on your {venture} account", data.what),
-                format!("A passkey was {} on your {venture} account", data.what),
+                format!("Security notice for your {venture} account"),
+                format!("Security notice for your {venture} account"),
             )
-            .preheader("The sign-in settings on your account changed.")
-            .paragraph(format!(
-                "A passkey was {} on your {venture} account. Passkeys and your address cannot \
-                     be changed without a fresh sign-in, and this notice is sent so that you \
-                     hear about it whatever the reason.",
-                data.what
-            ))
+            .preheader("Something changed in how you sign in.")
+            .paragraph(data.what.clone())
             .note(way_out)
-            .why(format!(
-                "a passkey on your {venture} account was {}",
-                data.what
-            ))
+            .why(format!("a security notice on your {venture} account"))
         } else if self.notice {
             let data: NoticeMail = parse(self.id, data)?;
             let way_out = if data.contact.is_empty() {
