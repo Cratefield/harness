@@ -471,3 +471,67 @@ fn one_person_cannot_delete_another_persons_passkey() {
         assert_eq!(response.status, StatusCode::NOT_FOUND);
     });
 }
+
+/// Issue #912, fifth review: a first passkey enrolled from a session that
+/// proved itself with a password (not a passkey or email) signs in at once, but
+/// the enrolment is a change: for a day the passkey cannot satisfy a step-up or
+/// an account change.
+#[test]
+fn a_first_passkey_from_a_password_session_is_a_change_for_a_day() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let user = kit.user("nick@example.com").await;
+        let password_session = cratefield_auth_core::issue(
+            &*kit.db,
+            &*kit.clock,
+            &*kit.id_gen,
+            cratefield_auth_core::Login {
+                user_id: &user,
+                ip: None,
+                user_agent: None,
+                presented_cookie: None,
+                presented_session_id: None,
+                amr: &["pwd"],
+            },
+        )
+        .await
+        .expect("session")
+        .value;
+        let authenticator = SoftAuthenticator::new(Algorithm::Es256);
+        let options = post(&kit, OPTIONS, "{}", Some(&password_session))
+            .await
+            .json();
+        let stored = post(
+            &kit,
+            VERIFY,
+            &verify_body(
+                &authenticator.register(RP_ID, ORIGIN, &challenge_of(&options)),
+                "first",
+            ),
+            Some(&password_session),
+        )
+        .await;
+        assert_eq!(stored.status, StatusCode::OK, "{}", stored.text());
+
+        // A passkey ceremony straight after: the account changed a moment ago,
+        // so the ceremony is refused as a step-up or an account change.
+        let passkey_session = cratefield_auth_core::issue(
+            &*kit.db,
+            &*kit.clock,
+            &*kit.id_gen,
+            cratefield_auth_core::Login {
+                user_id: &user,
+                ip: None,
+                user_agent: None,
+                presented_cookie: None,
+                presented_session_id: None,
+                amr: &["passkey", "user"],
+            },
+        )
+        .await
+        .expect("session")
+        .value;
+        let refused = post(&kit, OPTIONS, "{}", Some(&passkey_session)).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text());
+    });
+}

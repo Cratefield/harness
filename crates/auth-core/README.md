@@ -93,12 +93,21 @@ be at most two minutes old when the request returns.
 **Third review, what changed.** The `acr` a spent step-up earns is carried by
 the authorization code that spent it, never by the session: a refresh, or
 another client's code, does not carry it. An anonymous demand is
-rate-limited per caller address and capped at 1000 open per client (past it
-the request gets `temporarily_unavailable`). A `login_hint` naming an account
-binds an anonymous demand to that account, so another account's ceremony
-cannot answer it; a relying party must still compare `sub` with the account
-it meant. An account's first passkey needs a sign-in of any method within two
-minutes, and is exempt from the quiet period; a later passkey needs a passkey
+rate-limited per caller address, and the rate limiter is a required port: a
+deployment without one does not start. Anonymous demands are capped at 1000
+open per client, and past the cap the oldest is evicted. A `login_hint`
+naming an account binds an anonymous demand to that account, so another
+account's ceremony cannot answer it. Such demands are counted apart from the
+account's signed-in demands, at most five open per account (the new one is
+refused past that, `temporarily_unavailable`), and they never evict a
+signed-in one. A browser's earlier anonymous demand for the same account is
+replaced. A relying party must still compare `sub` with the account it meant
+(demands made without a `login_hint` have no account until the ceremony that
+answers them). An account's first passkey needs a sign-in of any method within two
+minutes. It is exempt from the quiet period when the enrolling session was a
+passkey or email ceremony; when it was a password or federated sign-in the
+enrolment is a change, so the passkey signs in at once but cannot satisfy a
+step-up for a day, and the notice goes out; a later passkey needs a passkey
 or email ceremony. Removing a passkey starts no quiet period. Where the
 deployment offers no magic link, an address change re-proves with the
 password. An account with no address (sign-up without email, #914) steps up

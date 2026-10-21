@@ -2326,7 +2326,9 @@ pub(crate) async fn consume_step_up(
     db.execute(&Statement::render(&update)).await
 }
 
-/// Open (unspent, unexpired) transactions bound to an account, oldest first.
+/// Open (unspent, unexpired) signed-in transactions bound to an account,
+/// oldest first. Anonymous demands naming the account carry a browser hash and
+/// are counted apart (fifth review).
 ///
 /// # Errors
 ///
@@ -2340,6 +2342,7 @@ pub(crate) async fn open_step_ups_for_user(
         .column(iden("id"))
         .from(iden("step_up_transactions"))
         .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("browser_hash")).is_null())
         .and_where(Expr::col(iden("consumed_at")).is_null())
         .and_where(Expr::col(iden("expires_at")).gt(now))
         .order_by(iden("created_ms"), sea_query::Order::Asc)
@@ -2349,6 +2352,34 @@ pub(crate) async fn open_step_ups_for_user(
         .rows
         .iter()
         .filter_map(|row| row.get::<String>("id"))
+        .collect())
+}
+
+/// Open anonymous demands that name an account (`login_hint`), oldest first, as
+/// `(id, browser_hash)`. Counted apart from the account's signed-in demands.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn open_anonymous_hint_step_ups(
+    db: &dyn Database,
+    user_id: &str,
+    now: &str,
+) -> Result<Vec<(String, String)>, DbError> {
+    let query = Query::select()
+        .columns(["id", "browser_hash"])
+        .from(iden("step_up_transactions"))
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("browser_hash")).is_not_null())
+        .and_where(Expr::col(iden("consumed_at")).is_null())
+        .and_where(Expr::col(iden("expires_at")).gt(now))
+        .order_by(iden("created_ms"), sea_query::Order::Asc)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .rows
+        .iter()
+        .filter_map(|row| Some((row.get::<String>("id")?, row.get::<String>("browser_hash")?)))
         .collect())
 }
 
@@ -2457,18 +2488,18 @@ pub(crate) async fn set_security_changed_at(
     db.execute(&Statement::render(&update)).await
 }
 
-/// Open (unspent, unexpired) transactions made before anyone was signed in,
-/// for one client. Bounds the demands an anonymous caller can leave behind
-/// (issue #912, third review).
+/// Open (unspent, unexpired) anonymous demands made for one client before
+/// anyone was signed in, oldest first. Past the client's cap the oldest are
+/// evicted (issue #912, fifth review).
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] when the statement fails.
-pub(crate) async fn count_open_unbound_step_ups(
+pub(crate) async fn open_unbound_step_ups(
     db: &dyn Database,
     client_id: &str,
     now: &str,
-) -> Result<usize, DbError> {
+) -> Result<Vec<String>, DbError> {
     let query = Query::select()
         .column(iden("id"))
         .from(iden("step_up_transactions"))
@@ -2476,7 +2507,12 @@ pub(crate) async fn count_open_unbound_step_ups(
         .and_where(Expr::col(iden("client_id")).eq(client_id))
         .and_where(Expr::col(iden("consumed_at")).is_null())
         .and_where(Expr::col(iden("expires_at")).gt(now))
+        .order_by(iden("created_ms"), sea_query::Order::Asc)
         .to_owned();
     let rows = db.query(&Statement::render(&query)).await?;
-    Ok(rows.len())
+    Ok(rows
+        .rows
+        .iter()
+        .filter_map(|row| row.get::<String>("id"))
+        .collect())
 }

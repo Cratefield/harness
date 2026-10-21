@@ -292,9 +292,14 @@ async fn verify(
 
     // A passkey added to an account that already had one is a change to its
     // sign-in: the next day's passkey and email ceremonies stop counting as a
-    // step-up. The first passkey is not (issue #912, third review). The address
-    // is told either way.
-    if !first
+    // step-up. So is a first passkey enrolled without a passkey or email
+    // ceremony. A first passkey enrolled with one is not (issue #912). The
+    // address is told either way.
+    // A first passkey enrolled from a session that proved itself with a password
+    // or a federated sign-in is a change all the same: the passkey signs in at
+    // once, but cannot satisfy a step-up for a day (issue #912, fifth review).
+    let strong = cratefield_auth_core::session_proves_by_passkey_or_email(db, &session.id).await;
+    if (!first || !strong)
         && let Err(err) =
             cratefield_auth_core::record_security_change(db, clock, &session.user_id).await
     {

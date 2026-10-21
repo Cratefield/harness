@@ -501,10 +501,15 @@ const STEP_UP_MAX_SESSION_AGE_MS: i64 = 120_000;
 /// that session pass a step-up (issue #912, second review).
 const SECURITY_QUIET_SECS: i64 = 24 * 60 * 60;
 
-/// The most open transactions made before anyone was signed in, for one
-/// client. Past it, the request is answered `temporarily_unavailable` rather
-/// than storing another demand (issue #912, third review).
+/// The most open demands made before anyone was signed in, for one client. Past
+/// it the oldest is evicted, so an anonymous caller can never lock another out
+/// (issue #912, fifth review).
 const MAX_OPEN_UNBOUND_PER_CLIENT: usize = 1000;
+
+/// The most open anonymous demands naming one account (`login_hint`). Counted
+/// apart from the account's signed-in demands, and past it the new one is
+/// refused, never an older one evicted (fifth review).
+const MAX_OPEN_ANONYMOUS_HINT_PER_ACCOUNT: usize = 5;
 
 /// The rate limit an anonymous caller's demands are held to, per caller
 /// address. `None` when the caller is within it, or when there is no limiter.
@@ -746,6 +751,66 @@ async fn account_quiet(
     }
 }
 
+/// Records an anonymous demand that names an account (`login_hint`) and
+/// returns the value to carry through the login (fifth review). It is counted
+/// apart from the account's signed-in demands, and it never evicts one. A
+/// browser's earlier anonymous demand for the same account is replaced, not
+/// accumulated. `None` when the account already holds its cap of these, which
+/// the caller answers with a refusal.
+async fn new_anonymous_hint(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    id_gen: &dyn IdGen,
+    user_id: &str,
+    client_id: &str,
+    request_browser: Option<&str>,
+    issued_browser: &str,
+) -> Result<Option<String>, Problem> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        tracing::error!(error = %err, "step-up entropy source failed");
+        Problem::internal()
+    })?;
+    let value = Base64UrlUnpadded::encode_string(&bytes);
+    let now = clock.now().replace_nanosecond(0).expect("in range");
+    let now_text = iso(now);
+    store::purge_step_ups(db, &now_text)
+        .await
+        .map_err(|_| Problem::internal())?;
+    let mut open = store::open_anonymous_hint_step_ups(db, user_id, &now_text)
+        .await
+        .map_err(|_| Problem::internal())?;
+    // The same browser asking again replaces its own earlier demand.
+    if let Some(browser) = request_browser {
+        for (id, _) in open.iter().filter(|(_, hash)| hash == browser) {
+            store::delete_step_up(db, id)
+                .await
+                .map_err(|_| Problem::internal())?;
+        }
+        open.retain(|(_, hash)| hash != browser);
+    }
+    if open.len() >= MAX_OPEN_ANONYMOUS_HINT_PER_ACCOUNT {
+        return Ok(None);
+    }
+    store::insert_step_up(
+        db,
+        &store::StepUpRow {
+            id: id_gen.ulid(),
+            user_id: Some(user_id.to_owned()),
+            client_id: client_id.to_owned(),
+            token_hash: sessions::sha256_hex(value.as_bytes()),
+            browser_hash: Some(issued_browser.to_owned()),
+            created_at: now_text,
+            created_ms: now_ms(clock),
+            expires_at: iso(now.saturating_add(time::Duration::seconds(STEP_UP_TTL_SECS))),
+            consumed_at: None,
+        },
+    )
+    .await
+    .map_err(|_| Problem::internal())?;
+    Ok(Some(value))
+}
+
 /// Records a new step-up transaction and returns the value to carry through
 /// the login. Only its hash is stored. Spent and expired transactions are
 /// purged first, and an account holding too many open ones drops its oldest.
@@ -768,16 +833,28 @@ async fn new_step_up(
     store::purge_step_ups(db, &now_text)
         .await
         .map_err(|_| Problem::internal())?;
-    if let Some(owner) = user_id {
-        let open = store::open_step_ups_for_user(db, owner, &now_text)
+    // Signed-in demands: past the account's cap the oldest is dropped.
+    // Anonymous ones: past the client's cap the oldest is evicted, so no caller
+    // can stop another from asking (issue #912, fifth review).
+    let (open, cap) = match user_id {
+        Some(owner) => (
+            store::open_step_ups_for_user(db, owner, &now_text)
+                .await
+                .map_err(|_| Problem::internal())?,
+            MAX_OPEN_STEP_UPS_PER_ACCOUNT,
+        ),
+        None => (
+            store::open_unbound_step_ups(db, client_id, &now_text)
+                .await
+                .map_err(|_| Problem::internal())?,
+            MAX_OPEN_UNBOUND_PER_CLIENT,
+        ),
+    };
+    let excess = (open.len() + 1).saturating_sub(cap);
+    for id in open.iter().take(excess) {
+        store::delete_step_up(db, id)
             .await
             .map_err(|_| Problem::internal())?;
-        let excess = (open.len() + 1).saturating_sub(MAX_OPEN_STEP_UPS_PER_ACCOUNT);
-        for id in open.iter().take(excess) {
-            store::delete_step_up(db, id)
-                .await
-                .map_err(|_| Problem::internal())?;
-        }
     }
     store::insert_step_up(
         db,
@@ -879,6 +956,18 @@ pub async fn require_recent_session(
         return Err(refused());
     }
     Ok(())
+}
+
+/// Whether the session was signed in by a passkey or an email ceremony, the two
+/// methods that can satisfy a step-up. A session that cannot be read is not one
+/// (fifth review): the caller then treats the enrolment as weak.
+pub async fn session_proves_by_passkey_or_email(db: &dyn Database, session_id: &str) -> bool {
+    match store::session_by_id(db, session_id).await {
+        Ok(Some(row)) => token_endpoint::amr_of(&row)
+            .iter()
+            .any(|method| STEP_UP_METHODS.contains(&method.as_str())),
+        _ => false,
+    }
 }
 
 /// Records that the account's passkeys or address just changed, so that the
@@ -1145,17 +1234,6 @@ async fn authorize(
             if let Some(decision) = step_up_limit(&state, &headers).await {
                 return Ok(cratefield_core::rate_limited(&decision).into_response());
             }
-            let now_text = iso(clock.now().replace_nanosecond(0).expect("in range"));
-            let open = store::count_open_unbound_step_ups(&*db, &query.client_id, &now_text)
-                .await
-                .map_err(|_| Problem::internal())?;
-            if open >= MAX_OPEN_UNBOUND_PER_CLIENT {
-                return Ok(oauth_error_redirect(
-                    &query.redirect_uri,
-                    "temporarily_unavailable",
-                    query.state.as_deref(),
-                ));
-            }
             // A login_hint that names an account binds the demand to that
             // account now, so a ceremony by anyone else cannot answer it (login
             // CSRF). A relying party must still compare `sub` (see README).
@@ -1174,18 +1252,44 @@ async fn authorize(
                 _ => None,
             };
             let cookie = new_browser_cookie()?;
-            let browser_hash = bound_to
-                .is_none()
-                .then(|| sessions::sha256_hex(cookie.as_bytes()));
-            let transaction = new_step_up(
-                &*db,
-                &*clock,
-                &*id_gen,
-                bound_to.as_deref(),
-                &query.client_id,
-                browser_hash,
-            )
-            .await?;
+            let issued = sessions::sha256_hex(cookie.as_bytes());
+            let transaction = match bound_to {
+                Some(user) => {
+                    match new_anonymous_hint(
+                        &*db,
+                        &*clock,
+                        &*id_gen,
+                        &user,
+                        &query.client_id,
+                        browser_hash.as_deref(),
+                        &issued,
+                    )
+                    .await?
+                    {
+                        Some(value) => value,
+                        // The account already holds its anonymous demands: this
+                        // one is refused, and no signed-in demand is touched.
+                        None => {
+                            return Ok(oauth_error_redirect(
+                                &query.redirect_uri,
+                                "temporarily_unavailable",
+                                query.state.as_deref(),
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    new_step_up(
+                        &*db,
+                        &*clock,
+                        &*id_gen,
+                        None,
+                        &query.client_id,
+                        Some(issued),
+                    )
+                    .await?
+                }
+            };
             browser_cookie = Some(cookie);
             StepUp::Required {
                 transaction: Some(transaction),

@@ -34,7 +34,7 @@ pub use brand::Brand;
 // could ask for it.
 pub use authorize::{
     LOGIN_METHODS_KEY, known_method_slugs, record_security_change, require_recent_ceremony,
-    require_recent_session, sign_in_links,
+    require_recent_session, session_proves_by_passkey_or_email, sign_in_links,
 };
 mod clients;
 /// Login CSRF (issue #439): the same-origin guard a state-changing route
@@ -414,20 +414,17 @@ impl Module for AuthCore {
         env!("CARGO_PKG_VERSION")
     }
 
+    /// The rate limiter is required (issue #912, fifth review). Anonymous step-up
+    /// demands are the one place an outsider can make this service store rows,
+    /// and without a limiter nothing bounds them: a deployment with none fails
+    /// to start rather than run unguarded. `Mailer` stays optional: a deployment
+    /// with no mailer still answers `/email/change` `202` and sends nothing.
     fn requires(&self) -> &'static [Port] {
-        &[Port::Db, Port::Clock, Port::IdGen]
+        &[Port::Db, Port::Clock, Port::IdGen, Port::RateLimiter]
     }
 
-    /// `Mailer` and `RateLimiter` are the two defences issue #648's email
-    /// change can leave out, and both are deliberate: a deployment with
-    /// no mailer still answers `/email/change` `202` and simply sends
-    /// nothing, and a deployment with no limiter still answers — the
-    /// guards behind this are the password credential's own lockout and
-    /// the token's guarded single-use consume. Requiring either would
-    /// take every auth-core deployment down with them, which is the
-    /// harness's standing production rule for optional ports.
     fn optional(&self) -> &'static [Port] {
-        &[Port::Mailer, Port::RateLimiter]
+        &[Port::Mailer]
     }
 
     /// The one event issue #648 adds. `user_id` only, never an address.
@@ -888,8 +885,11 @@ mod tests {
         assert_eq!(module.name(), "auth-core");
         assert_eq!(module.version(), env!("CARGO_PKG_VERSION"));
         assert_eq!(module.harness_api(), HARNESS_API);
-        assert_eq!(module.requires(), [Port::Db, Port::Clock, Port::IdGen]);
-        assert_eq!(module.optional(), [Port::Mailer, Port::RateLimiter]);
+        assert_eq!(
+            module.requires(),
+            [Port::Db, Port::Clock, Port::IdGen, Port::RateLimiter]
+        );
+        assert_eq!(module.optional(), [Port::Mailer]);
         assert_eq!(module.emits(), [email::EVENT_EMAIL_CHANGED]);
         assert_eq!(
             module.tables(),

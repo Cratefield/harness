@@ -1543,13 +1543,11 @@ async fn anonymous_demands_are_capped_per_client() {
         assert_eq!(status, StatusCode::OK);
     }
     assert_eq!(transactions(&kit).await, 1000);
-    let (_, headers, _) = authorize(&kit, &a, "&prompt=login", None).await;
-    assert!(location(&headers).contains("error=temporarily_unavailable"));
-    assert_eq!(
-        transactions(&kit).await,
-        1000,
-        "the refused one stores nothing"
-    );
+    // Past the cap the oldest anonymous demand is evicted, never the request
+    // refused: an anonymous caller cannot lock another out (fifth review).
+    let (status, _, _) = authorize(&kit, &a, "&prompt=login", None).await;
+    assert_eq!(status, StatusCode::OK, "the new demand is served");
+    assert_eq!(transactions(&kit).await, 1000, "the oldest one was evicted");
 }
 
 /// Probe J (issue #912, third review): a demand made before anyone is signed
@@ -1690,4 +1688,90 @@ async fn an_account_with_no_email_steps_up_on_a_passkey_ceremony_alone() {
         is_code(&headers),
         "a passkey ceremony steps up an account with no email"
     );
+}
+
+/// Probe K (issue #912, fifth review): anonymous `login_hint` demands for an
+/// account cannot cancel that account's signed-in demand. They are counted
+/// apart, refused past their own cap, and never evict.
+#[pollster::test]
+async fn anonymous_login_hint_demands_never_evict_a_signed_in_demand() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "victim").await;
+    let a = client(&kit, false).await;
+    let old = session_ago(&kit, &clock, "victim", 3600, &["passkey", "user"]).await;
+    let v = demand(&kit, &a, &old).await;
+    let mut refused = 0;
+    for _ in 0..20 {
+        let (status, _, _) = authorize(
+            &kit,
+            &a,
+            "&prompt=login&login_hint=victim%40example.com",
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            refused += 1;
+        }
+    }
+    assert!(
+        refused > 0,
+        "past its own cap, an anonymous hint demand is refused"
+    );
+    clock_advance_ms(&clock, 1000);
+    let fresh = session_now(&kit, &clock, "victim", &["passkey", "user"]).await;
+    let (status, headers, _) = authorize(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={v}"),
+        Some(&fresh),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert!(
+        is_code(&headers),
+        "the victim's signed-in demand survived the flood"
+    );
+}
+
+/// Probe J2 (issue #912, fifth review): a `login_hint` binds the anonymous demand
+/// to the account it names. An attacker's account cannot spend it, and the
+/// named account can, from any browser (documented: the account is the
+/// authority here, the browser is not).
+#[pollster::test]
+async fn a_login_hint_demand_is_spent_by_its_account_only() {
+    let (kit, clock) = kit();
+    seed_user(&kit, "victim").await;
+    seed_user(&kit, "attacker").await;
+    let a = client(&kit, false).await;
+    let (_, headers, body) = authorize(
+        &kit,
+        &a,
+        "&prompt=login&login_hint=victim%40example.com",
+        None,
+    )
+    .await;
+    let cookie = browser_cookie_of(&headers);
+    let tx = transaction_in(&body).expect("a transaction");
+    clock_advance_ms(&clock, 1000);
+    let attacker = session_now(&kit, &clock, "attacker", &["email"]).await;
+    let (_, headers, _) = authorize_with(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={tx}"),
+        &format!("__Host-session={attacker}; __Host-step-up={cookie}"),
+    )
+    .await;
+    assert!(
+        !is_code(&headers),
+        "the attacker's account does not spend it"
+    );
+    let victim = session_now(&kit, &clock, "victim", &["passkey", "user"]).await;
+    let (_, headers, _) = authorize_with(
+        &kit,
+        &a,
+        &format!("&prompt=login&step_up={tx}"),
+        &format!("__Host-session={victim}"),
+    )
+    .await;
+    assert!(is_code(&headers), "the named account spends it");
 }
