@@ -1,0 +1,163 @@
+# The `factory0` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for Factory Zero on factory0.ventures'
+# own domain with Factory Zero's branding, D1, secrets and passkey relying
+# party. Hosted by Cratefield on Factory Zero's domain (a Cratefield-managed
+# instance). Consumers: the factory0.ventures website (its Pages Functions
+# hold the session, the Control panel sign-in) and api.factory0.ventures
+# (factory0-backend verifies the access token). See README.md.
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-factory0-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# Provisioned on the Factory0 Cloudflare account (53e50d9dab2b9b72e39ce243d0a79e7f):
+# the staging D1 exists (id below) and is migrated. Still needed before
+# production and before staging can issue a session (docs/auth/MANAGED-INSTANCES.md):
+# - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
+#   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
+#   TURNSTILE_SECRET. Per environment: `wrangler secret put <NAME> [--env production]`.
+# - The production D1 (`wrangler d1 create factory0-auth-production`), then
+#   paste its id in place of REPLACE_WITH_PRODUCTION_D1_ID below.
+# - The custom domains (routes below) on the Factory0 account's factory0.ventures
+#   zone, the Turnstile site for both hostnames, and the Owlpost sending
+#   domain `send.factory0.ventures` (already used by the site's contact form).
+# - Register the website's OIDC client against the instance's admin API
+#   (README.md, "Clients").
+name = "factory0-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.factory0.ventures", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1701"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "factory0-auth-staging"
+database_id = "8f632a52-b654-4869-87ce-315d7af94340"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.factory0.ventures"
+AUTH_CORE_ISSUER = "https://auth-staging.factory0.ventures"
+AUTH_VENTURE_NAME = "factory0-auth"
+AUTH_CORS_ORIGINS = "https://factory0.ventures,https://www.factory0.ventures,https://staging.factory0.ventures,http://localhost:8788"
+AUTH_BRAND_NAME = "Factory Zero"
+AUTH_BRAND_FOOTER = "Factory Zero"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "auth-staging.factory0.ventures"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.factory0.ventures,http://localhost:8788"
+# Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
+# the OWLPOST_API_KEY secret exists, and boots without mail until then
+# (production keeps `owlpost` and refuses to boot without the key).
+MAIL_FROM = "Factory Zero <no-reply@send.factory0.ventures>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.factory0.ventures"
+AUTH_MAGIC_LINK_MAIL_FROM = "Factory Zero <sign-in@send.factory0.ventures>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.factory0.ventures"
+AUTH_PASSWORD_MAIL_FROM = "Factory Zero <sign-in@send.factory0.ventures>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.factory0.ventures"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.factory0.ventures"
+AUTH_BRAND_LOGO_URL = "https://factory0.ventures/assets/icon-512.png"
+# Factory Zero's own tokens (factory0.ventures, DESIGN.md): ink #0B0B0A,
+# paper #F1EFE9, the lime tint #C6FF3D, Archivo for everything, square corners.
+AUTH_BRAND_ACCENT = "#C6FF3D"
+AUTH_BRAND_ACCENT_TEXT = "#0B0B0A"
+AUTH_BRAND_BACKGROUND = "#0B0B0A"
+AUTH_BRAND_TEXT = "#F1EFE9"
+AUTH_BRAND_DANGER = "#FF5A36"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_RADIUS = "0"
+AUTH_BRAND_FONT_DISPLAY = "Archivo, 'Helvetica Neue', Arial, sans-serif"
+AUTH_BRAND_FONT_BODY = "Archivo, 'Helvetica Neue', Arial, sans-serif"
+AUTH_BRAND_FONT_MONO = "ui-monospace, SFMono-Regular, Menlo, monospace"
+AUTH_BRAND_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@factory0.ventures"
+# AUTH_BRAND_PRIVACY_URL = "https://factory0.ventures/privacy/"   # needs-human: factory0.ventures has no privacy page yet; uncomment once it exists
+# AUTH_BRAND_TERMS_URL = "https://factory0.ventures/terms/"   # needs-human: factory0.ventures has no terms page yet; uncomment once it exists
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.factory0.ventures", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1702"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "factory0-auth-production"
+database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.factory0.ventures"
+AUTH_CORE_ISSUER = "https://auth.factory0.ventures"
+AUTH_VENTURE_NAME = "factory0-auth"
+AUTH_CORS_ORIGINS = "https://factory0.ventures,https://www.factory0.ventures"
+AUTH_BRAND_NAME = "Factory Zero"
+AUTH_BRAND_FOOTER = "Factory Zero"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "factory0.ventures"
+AUTH_PASSKEYS_ORIGINS = "https://auth.factory0.ventures"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Factory Zero <no-reply@send.factory0.ventures>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.factory0.ventures"
+AUTH_MAGIC_LINK_MAIL_FROM = "Factory Zero <sign-in@send.factory0.ventures>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.factory0.ventures"
+AUTH_PASSWORD_MAIL_FROM = "Factory Zero <sign-in@send.factory0.ventures>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.factory0.ventures"
+AUTH_META_REDIRECT_BASE = "https://auth.factory0.ventures"
+AUTH_BRAND_LOGO_URL = "https://factory0.ventures/assets/icon-512.png"
+AUTH_BRAND_ACCENT = "#C6FF3D"
+AUTH_BRAND_ACCENT_TEXT = "#0B0B0A"
+AUTH_BRAND_BACKGROUND = "#0B0B0A"
+AUTH_BRAND_TEXT = "#F1EFE9"
+AUTH_BRAND_DANGER = "#FF5A36"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_RADIUS = "0"
+AUTH_BRAND_FONT_DISPLAY = "Archivo, 'Helvetica Neue', Arial, sans-serif"
+AUTH_BRAND_FONT_BODY = "Archivo, 'Helvetica Neue', Arial, sans-serif"
+AUTH_BRAND_FONT_MONO = "ui-monospace, SFMono-Regular, Menlo, monospace"
+AUTH_BRAND_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap"
+AUTH_BRAND_SUPPORT_EMAIL = "contact@factory0.ventures"
+# AUTH_BRAND_PRIVACY_URL = "https://factory0.ventures/privacy/"   # needs-human: factory0.ventures has no privacy page yet; uncomment once it exists
+# AUTH_BRAND_TERMS_URL = "https://factory0.ventures/terms/"   # needs-human: factory0.ventures has no terms page yet; uncomment once it exists
