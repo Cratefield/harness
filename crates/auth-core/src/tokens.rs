@@ -320,8 +320,9 @@ impl SigningKeys {
             "claims_supported": [
                 "iss", "sub", "aud", "exp", "iat", "sid",
                 "email", "email_verified", "amr", "sso_connection",
-                "auth_time", "nonce", "roles"
+                "auth_time", "nonce", "roles", "azp", "sid"
             ],
+            "scopes_supported": ["openid"],
         })
     }
 }
@@ -366,8 +367,13 @@ struct IdClaims<'a> {
     iss: &'a str,
     sub: &'a str,
     aud: &'a str,
+    /// The authorized party: the client the token was issued to (OpenID
+    /// Connect Core section 2). With one audience it equals `aud`.
+    azp: &'a str,
     exp: i64,
     iat: i64,
+    /// The session behind the authentication, as the access token names it.
+    sid: &'a str,
     auth_time: i64,
     amr: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -497,14 +503,17 @@ pub fn mint_id_token(
     amr: &[String],
     nonce: Option<&str>,
     roles: Option<&[String]>,
+    session_id: &str,
 ) -> Result<String, TokenError> {
     let now = clock.now().replace_nanosecond(0).expect("in range");
     let claims = IdClaims {
         iss: &keys.issuer,
         sub: user_id,
         aud: client_id,
+        azp: client_id,
         exp: now.unix_timestamp() + ACCESS_TOKEN_SECS,
         iat: now.unix_timestamp(),
+        sid: session_id,
         auth_time,
         amr,
         nonce,

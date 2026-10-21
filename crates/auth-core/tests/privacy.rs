@@ -43,6 +43,10 @@ const SUBJECT_TABLES: &[&str] = &[
     // Issue #854: the enable/disable audit trail, erased with the account
     // it names.
     "user_admin_audit",
+    // Issue #912: the role-change audit and the step-up transactions, both
+    // erased with the account they name.
+    "user_role_audit",
+    "step_up_transactions",
 ];
 
 /// The tables that hold a person and survive an erasure, with the reason
@@ -157,6 +161,23 @@ async fn seed(kit: &TestHarness, user: &str, email: &str) {
             "INSERT INTO user_admin_audit (id, user_id, action, at) \
              VALUES (?, ?, 'user.disable', ?)",
             vec![format!("audit-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "user_role_audit",
+            "INSERT INTO user_role_audit (id, user_id, role, at) VALUES (?, ?, 'admin', ?)",
+            vec![format!("role-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "step_up_transactions",
+            "INSERT INTO step_up_transactions (id, user_id, client_id, token_hash, created_at, \
+             expires_at) VALUES (?, ?, 'app', ?, ?, ?)",
+            vec![
+                format!("stu-{user}").into(),
+                user.into(),
+                format!("tx-digest-{user}").into(),
+                at.into(),
+                "2027-01-01T00:00:00Z".into(),
+            ],
         ),
     ];
     for (table, sql, values) in rows {

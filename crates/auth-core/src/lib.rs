@@ -298,6 +298,16 @@ const MIGRATION_STEP_UP: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0013_step_up.sql"),
 );
 
+/// The step-up transaction table and the role audit of issue #912, review
+/// follow-up: the per-account demand column is dropped, and each demand
+/// becomes a single-use transaction bound to an account and a client.
+/// Portable DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_STEP_UP_TRANSACTIONS: SqlMigration = SqlMigration::new(
+    "0014",
+    "step_up_transactions",
+    include_str!("../migrations/sqlite/0014_step_up_transactions.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -429,6 +439,9 @@ impl Module for AuthCore {
             "sso_connections",
             // Issue #854: one row per admin enable/disable of an account.
             "user_admin_audit",
+            // Issue #912: one row per step-up demand, and per role change.
+            "step_up_transactions",
+            "user_role_audit",
         ]
     }
 
@@ -545,6 +558,26 @@ impl Module for AuthCore {
                 redacted: &[],
                 subject_via: None,
             },
+            PersonalDataSet {
+                table: "user_role_audit",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The record of an operator changing your role in this \
+                              instance: which role, and when.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
+                table: "step_up_transactions",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "A record that you were asked to sign in again for an \
+                              application, and when. Carries no credential.",
+                redacted: &["token_hash"],
+                subject_via: None,
+            },
             // The two registration tables. They are the one place in this
             // module that holds a secret and no person: an application's
             // secret is not somebody's credential, and no column here names a
@@ -611,7 +644,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 13] = [
+        const MIGRATIONS: [SqlMigration; 14] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -625,6 +658,7 @@ impl Module for AuthCore {
             MIGRATION_EMAIL_CHANGE,
             MIGRATION_USER_ADMIN_AUDIT,
             MIGRATION_STEP_UP,
+            MIGRATION_STEP_UP_TRANSACTIONS,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -635,7 +669,7 @@ impl Module for AuthCore {
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 13] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 14] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -649,6 +683,7 @@ impl Module for AuthCore {
             MIGRATION_EMAIL_CHANGE_POSTGRES,
             MIGRATION_USER_ADMIN_AUDIT,
             MIGRATION_STEP_UP,
+            MIGRATION_STEP_UP_TRANSACTIONS,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -839,7 +874,10 @@ mod tests {
                 // Issue #627: the per-organization SSO connections.
                 "sso_connections",
                 // Issue #854: the enable/disable audit trail.
-                "user_admin_audit"
+                "user_admin_audit",
+                // Issue #912: the role-change audit and the step-up transactions.
+                "step_up_transactions",
+                "user_role_audit"
             ]
         );
         assert!(!module.public_writes());
@@ -905,7 +943,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 13);
+        assert_eq!(migrations.sqlite.len(), 14);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -932,10 +970,12 @@ mod tests {
         assert_eq!(migrations.sqlite[11].name, "user_admin_audit");
         assert_eq!(migrations.sqlite[12].id, "0013");
         assert_eq!(migrations.sqlite[12].name, "step_up");
+        assert_eq!(migrations.sqlite[13].id, "0014");
+        assert_eq!(migrations.sqlite[13].name, "step_up_transactions");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 13);
+        assert_eq!(migrations.postgres.len(), 14);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -984,6 +1024,10 @@ mod tests {
         assert_eq!(
             migrations.postgres[12].sql, migrations.sqlite[12].sql,
             "the step-up columns are portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
+            migrations.postgres[13].sql, migrations.sqlite[13].sql,
+            "the step-up tables are portable DDL, so Postgres reuses the sqlite file"
         );
         assert_eq!(
             migrations.postgres[6].sql, migrations.sqlite[6].sql,

@@ -123,24 +123,21 @@ async fn set_role(
             format!("role must be one of {}", ROLES.join(", ")),
         ));
     }
-    let (Some(db), Some(clock)) = (state.ctx.ports.db.clone(), state.ctx.ports.clock.clone())
-    else {
+    let (Some(db), Some(clock), Some(id_gen)) = (
+        state.ctx.ports.db.clone(),
+        state.ctx.ports.clock.clone(),
+        state.ctx.ports.id_gen.clone(),
+    ) else {
         return Err(internal(&scope));
     };
     store::user_by_id(&*db, &sub)
         .await?
         .ok_or_else(|| Problem::not_found().instance(&scope.request_id))?;
+    // The role and its `user_role_audit` row move in one batch, as a
+    // disable and its `user_admin_audit` row do.
     let now = crate::clients::now_iso(&*clock);
-    if store::set_user_role(&*db, &sub, &body.role, &now).await? == 0 {
-        return Err(Problem::not_found().instance(&scope.request_id));
-    }
-    tracing::info!(
-        audit = true,
-        action = "user.role",
-        role = %body.role,
-        subject_hash = %subject_hash(&sub),
-        "auth-core admin"
-    );
+    store::set_user_role(&*db, &sub, &body.role, &id_gen.ulid(), &now).await?;
+    audit("user.role", &sub);
     Ok(Json(json!({ "sub": sub, "role": body.role })).into_response())
 }
 

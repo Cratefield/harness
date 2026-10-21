@@ -26,7 +26,7 @@ access and erasure walk.
 | `POST /admin/users/import`, `GET /admin/users/by-external-id` | `fz auth import`'s server half |
 | `POST /admin/users/{sub}/disable`, `POST /admin/users/{sub}/enable` | Switch an account off and back on (#854) |
 | `GET /admin/users/{sub}/passkeys` | `{"passkeys": <count>}`: how many usable passkeys the account holds |
-| `POST /admin/users/{sub}/role` | Set an account's role: `owner`, `admin` or `member` (#912) |
+| `POST /admin/users/{sub}/role` | Set an account's role: `owner`, `admin` or `member`, audited (#912) |
 | `POST /sso/connections`, `GET /sso/connections` | An organization's own identity provider (#627) |
 | `POST /email/change` | `{ new_email, current_password? }`, signed in. Always `202`, always the same body |
 | `GET /email/confirm?token=…` | The page an email-change link opens. Never reads or spends the token |
@@ -41,42 +41,56 @@ later reset mail points at.
 `/authorize` honours the two OpenID Connect Core (section 3.1.2.1) requests
 that ask for a fresh sign-in:
 
-- `prompt=login` shows the chooser even with a live session. Only a
-  ceremony that completes after the request satisfies it: the request is
-  recorded on the account (`users.reauth_requested_at`) and the session the
-  browser holds must have been created strictly after that moment. A session
-  from before the request never does, and a request cannot make one.
-- `max_age=N` requires the last authentication to be at most N seconds old.
-  `max_age=0` always requires a ceremony. A session's creation time is its
-  last real authentication, and a refresh never touches it, so `auth_time`
-  and `max_age` do not move when a token is refreshed.
+- `prompt=login` shows the chooser even with a live session, and `max_age=0`
+  does the same. Each makes a **step-up transaction**: a single-use record
+  bound to the account and the client, valid for ten minutes, whose value
+  the chooser carries through the login as `step_up`. A session satisfies
+  the demand only if a passkey or an email link created it after the
+  transaction began, no more than 120 seconds before the request returns,
+  and only once: the check that accepts it spends the transaction. A
+  session from before the demand, a later unrelated login, a federated or
+  SSO sign-in, and a password sign-in do not satisfy it. Federated and SSO
+  sign-ins are not forwarded to the upstream IdP for a step-up; the chooser
+  is shown instead, so the person can use a passkey or an email link.
+- `max_age=N` (N > 0) is an age check against the session's creation. It
+  records nothing, so a failed check sends the person to the chooser and
+  leaves no demand behind.
 - `prompt=none` never shows a page: it answers `login_required` when no
-  session is live or a ceremony is due.
+  session is live or a step-up is due. It records nothing.
 
 A malformed `prompt` or `max_age` (an unknown prompt value, `none` alongside
 another, a negative or non-numeric age) and a `nonce` over 512 bytes are
 refused as `invalid_request` to the registered URI, as the other parameter
-errors are. When there is no session the chooser's login is itself the
-ceremony, so `prompt` and `max_age` are not carried back with it.
+errors are. Without a session the chooser's login is itself the ceremony,
+so `prompt` and `max_age` are not carried back with it.
 
-**Tokens.** The access token carries `auth_time` (epoch seconds) and `amr`
-beside `email` and `email_verified`. The code grant also answers an
-`id_token` (ES256, the same key as the access token) with `auth_time`,
-`amr`, `aud` and `sub`, and `nonce` when the request sent one. The refresh
-grant answers no ID token. `amr` values are the ones the login methods
-record: `passkey` with `user` (and `mfa` when the authenticator verified the
-user), `email`, `pwd`, `federated`, `sso`.
+**Tokens.** The access token (`typ: at+jwt`) carries `auth_time` (epoch
+seconds) and `amr` beside `email` and `email_verified`. A request with
+`scope` including `openid` also gets an `id_token` (`typ: JWT`, ES256, the
+same key) with `iss`, `sub`, `aud`, `azp`, `sid`, `auth_time`, `amr`,
+`nonce` when the request sent one, and `roles` when the client asks for
+them. A request without `openid` gets no ID token. The refresh grant never
+answers an ID token. `amr` values are the ones the login methods record:
+`passkey` with `user` (and `mfa` when the authenticator verified the user),
+`email`, `pwd`, `federated`, `sso`. Only `passkey` and `email` satisfy a
+step-up.
 
 **Roles.** `users.role` is `owner`, `admin` or `member` (every account starts
 as `member`), set by `POST /admin/users/{sub}/role` under the admin bearer
-token. A client gets a `roles` claim, `["owner"]` or the one role it has,
-only when it is registered with `roles_claim: true` (off by default). Nothing
-a client sends can set a role: the role is read from the account, never from
-the request. A role change reaches new tokens at once; a token already minted
-keeps its role until it expires, at most `ACCESS_TOKEN_SECS` later.
+token and audited in `user_role_audit`. A client gets a `roles` claim,
+`["owner"]` or the one role it has, only when it is registered with
+`roles_claim: true` (off by default). A role that cannot be read fails the
+token request rather than being guessed. Nothing a client sends can set a
+role: the role is read from the account, never from the request. A role
+change reaches new tokens at once; a token already minted keeps its role
+until it expires, at most `ACCESS_TOKEN_SECS` later.
 
 Discovery advertises `prompt_values_supported` (`none`, `login`, `consent`,
-`select_account`) and the claims above in `claims_supported`.
+`select_account`), `scopes_supported` (`openid`), and the claims above in
+`claims_supported`.
+
+Relying parties must check freshness themselves: `cratefield-auth-client`
+exposes `authenticated_within`.
 
 ## The email change (#648)
 

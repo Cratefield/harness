@@ -16,6 +16,26 @@ Verify auth-service tokens in a consuming app: JWKS fetch and cache,
 ES256 verification with the audience check that hand-rolled verifiers
 forget, and an axum extractor. Issue #11.
 
+## Freshness and roles (issue #912)
+
+Verification proves who signed a token and that it was minted for this
+client. It does not prove that the person just proved who they are. A
+relying party that is about to approve something (a payment, an offer, a
+change of ownership) must check that itself:
+
+```ignore
+if !claims.authenticated_within(300, now) {
+    // ask the person to sign in again, with prompt=login
+}
+```
+
+`auth_time` is epoch seconds of the person's last real sign-in ceremony. A
+refresh never moves it, so a long-lived session does not look fresh. `roles`
+lists the account's roles in the issuing instance (`owner`, `admin`,
+`member`) when the client was registered to receive them, and is empty
+otherwise. Only access tokens verify here: a token whose `typ` is not
+`at+jwt` (an ID token, for one) is refused.
+
 ---
 
 MIT. Part of the [Cratefield harness](https://github.com/Cratefield/harness).

@@ -92,7 +92,7 @@ fn plus_days(t: OffsetDateTime, days: i64) -> OffsetDateTime {
     t.saturating_add(time::Duration::days(days))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(digest.len() * 2);

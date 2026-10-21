@@ -2110,10 +2110,12 @@ pub async fn update_sso_connection(
 }
 
 // ---------------------------------------------------------------------------
-// step-up re-authentication and roles (issue #912)
+// roles and step-up transactions (issue #912)
 
 /// The role an account holds in this instance: `owner`, `admin` or
-/// `member`. `None` for an account that does not exist.
+/// `member`. `None` for an account that does not exist, or whose role
+/// cannot be read: a token must never be minted with a role the server
+/// did not record.
 ///
 /// # Errors
 ///
@@ -2128,21 +2130,25 @@ pub(crate) async fn user_role(db: &dyn Database, id: &str) -> Result<Option<Stri
     let rows = db.query(&Statement::render(&query)).await?;
     Ok(rows
         .first()
-        .map(|row| row.get::<String>("role").unwrap_or_default()))
+        .and_then(|row| row.get::<String>("role"))
+        .filter(|role| !role.is_empty()))
 }
 
-/// Sets an account's role. The caller has validated the role name; the
-/// column's CHECK refuses anything else as a backstop.
+/// Sets an account's role and writes its `user_role_audit` row in one
+/// batch, so the role can never change without its record. The audit
+/// insert takes its `user_id` from the `users` row, so a racing erasure
+/// writes no dangling row.
 ///
 /// # Errors
 ///
-/// [`DbError::Execute`] when the statement fails.
+/// [`DbError::Batch`] when the batch fails.
 pub(crate) async fn set_user_role(
     db: &dyn Database,
     id: &str,
     role: &str,
+    audit_id: &str,
     now: &str,
-) -> Result<u64, DbError> {
+) -> Result<(), DbError> {
     let mut update = Query::update();
     update
         .table(iden("users"))
@@ -2151,7 +2157,22 @@ pub(crate) async fn set_user_role(
             (iden("updated_at"), now.into()),
         ])
         .and_where(Expr::col(iden("id")).eq(id));
-    db.execute(&Statement::render(&update)).await
+    let mut select = Query::select();
+    select
+        .expr(Expr::val(audit_id.to_owned()))
+        .column(iden("id"))
+        .expr(Expr::val(role.to_owned()))
+        .expr(Expr::val(now.to_owned()))
+        .from(iden("users"))
+        .and_where(Expr::col(iden("id")).eq(id));
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden("user_role_audit"))
+        .columns(["id", "user_id", "role", "at"])
+        .select_from(select)
+        .map_err(|err| DbError::Batch(err.to_string()))?;
+    db.batch_atomic(&[Statement::render(&update), Statement::render(&insert)])
+        .await
 }
 
 /// Whether a client's tokens carry the `roles` claim. `false` for a client
@@ -2190,57 +2211,108 @@ pub(crate) async fn set_client_roles_claim(
     db.execute(&Statement::render(&update)).await
 }
 
-/// When a request last demanded a fresh authentication ceremony for this
-/// account, or `None` when nothing is pending.
+/// One `step_up_transactions` row: a demand for a fresh ceremony, made for
+/// one account and one client (issue #912).
+#[derive(Debug, Clone)]
+pub(crate) struct StepUpRow {
+    pub id: String,
+    pub user_id: String,
+    pub client_id: String,
+    /// Hex SHA-256 of the transaction value. The value is never stored.
+    pub token_hash: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub consumed_at: Option<String>,
+}
+
+fn step_up_from(row: &Row) -> StepUpRow {
+    StepUpRow {
+        id: row.get::<String>("id").unwrap_or_default(),
+        user_id: row.get::<String>("user_id").unwrap_or_default(),
+        client_id: row.get::<String>("client_id").unwrap_or_default(),
+        token_hash: row.get::<String>("token_hash").unwrap_or_default(),
+        created_at: row.get::<String>("created_at").unwrap_or_default(),
+        expires_at: row.get::<String>("expires_at").unwrap_or_default(),
+        consumed_at: optional::<String>(row, "consumed_at"),
+    }
+}
+
+/// Records a new step-up transaction.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn insert_step_up(db: &dyn Database, row: &StepUpRow) -> Result<(), DbError> {
+    let mut insert = Query::insert();
+    insert
+        .into_table(iden("step_up_transactions"))
+        .columns([
+            "id",
+            "user_id",
+            "client_id",
+            "token_hash",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+        ])
+        .values_panic([
+            row.id.clone().into(),
+            row.user_id.clone().into(),
+            row.client_id.clone().into(),
+            row.token_hash.clone().into(),
+            row.created_at.clone().into(),
+            row.expires_at.clone().into(),
+            Option::<String>::None.into(),
+        ]);
+    db.execute(&Statement::render(&insert)).await?;
+    Ok(())
+}
+
+/// Finds a step-up transaction by the hash of the value carried through
+/// the login.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] when the statement fails.
-pub(crate) async fn reauth_requested_at(
+pub(crate) async fn step_up_by_hash(
     db: &dyn Database,
-    user_id: &str,
-) -> Result<Option<String>, DbError> {
+    token_hash: &str,
+) -> Result<Option<StepUpRow>, DbError> {
     let query = Query::select()
-        .column(iden("reauth_requested_at"))
-        .from(iden("users"))
-        .and_where(Expr::col(iden("id")).eq(user_id))
+        .columns([
+            "id",
+            "user_id",
+            "client_id",
+            "token_hash",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+        ])
+        .from(iden("step_up_transactions"))
+        .and_where(Expr::col(iden("token_hash")).eq(token_hash))
         .limit(1)
         .to_owned();
     let rows = db.query(&Statement::render(&query)).await?;
-    Ok(rows
-        .first()
-        .and_then(|row| row.get::<Option<String>>("reauth_requested_at").flatten()))
+    Ok(rows.first().map(step_up_from))
 }
 
-/// Records a demand for a fresh ceremony at `now`. A ceremony that
-/// completes strictly after `now` satisfies it.
+/// Spends a step-up transaction, if nobody has. The guard is in the
+/// statement, so of two requests racing on one transaction exactly one
+/// gets `1` back. Returns the rows changed.
 ///
 /// # Errors
 ///
 /// [`DbError::Execute`] when the statement fails.
-pub(crate) async fn request_reauth(
+pub(crate) async fn consume_step_up(
     db: &dyn Database,
-    user_id: &str,
+    id: &str,
     now: &str,
 ) -> Result<u64, DbError> {
     let mut update = Query::update();
     update
-        .table(iden("users"))
-        .values([(iden("reauth_requested_at"), now.into())])
-        .and_where(Expr::col(iden("id")).eq(user_id));
-    db.execute(&Statement::render(&update)).await
-}
-
-/// Clears a pending demand for a fresh ceremony, once one has been met.
-///
-/// # Errors
-///
-/// [`DbError::Execute`] when the statement fails.
-pub(crate) async fn clear_reauth_request(db: &dyn Database, user_id: &str) -> Result<u64, DbError> {
-    let mut update = Query::update();
-    update
-        .table(iden("users"))
-        .values([(iden("reauth_requested_at"), Option::<String>::None.into())])
-        .and_where(Expr::col(iden("id")).eq(user_id));
+        .table(iden("step_up_transactions"))
+        .values([(iden("consumed_at"), now.into())])
+        .and_where(Expr::col(iden("id")).eq(id))
+        .and_where(Expr::col(iden("consumed_at")).is_null());
     db.execute(&Statement::render(&update)).await
 }

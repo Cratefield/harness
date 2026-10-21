@@ -131,7 +131,7 @@ async fn live_session_and_user(
     Ok(Some((session, user)))
 }
 
-fn amr_of(session: &store::SessionRow) -> Vec<String> {
+pub(crate) fn amr_of(session: &store::SessionRow) -> Vec<String> {
     session
         .amr
         .as_deref()
@@ -162,9 +162,13 @@ async fn roles_for(
     if !store::client_roles_claim(db, client_id).await? {
         return Ok(None);
     }
-    let role = store::user_role(db, &user.id)
-        .await?
-        .unwrap_or_else(|| "member".to_owned());
+    // A role that cannot be read is an error, never a claim: a token must
+    // not carry a role the server did not record, and `member` is not a
+    // safe stand-in for a read that failed.
+    let role = store::user_role(db, &user.id).await?.ok_or_else(|| {
+        tracing::error!("an account's role could not be read");
+        Problem::internal()
+    })?;
     Ok(Some(vec![role]))
 }
 
@@ -250,6 +254,7 @@ async fn minted_response(
             &amr,
             nonce,
             roles.as_deref(),
+            &session.id,
         )
         .map_err(|err| {
             tracing::error!(error = %err, "id-token mint failed");
@@ -271,7 +276,7 @@ async fn mint_pair(
     session: &store::SessionRow,
     user: &UserRow,
     client_id: &str,
-    nonce: Option<&str>,
+    id_token: IdToken<'_>,
 ) -> Result<Response, Problem> {
     let refresh = mint_refresh_token(db, clock, id_gen, &session.id, &user.id, client_id)
         .await
@@ -280,14 +285,7 @@ async fn mint_pair(
             Problem::internal()
         })?;
     minted_response(
-        db,
-        clock,
-        keys,
-        session,
-        user,
-        client_id,
-        &refresh,
-        IdToken::Issue { nonce },
+        db, clock, keys, session, user, client_id, &refresh, id_token,
     )
     .await
 }
@@ -422,8 +420,15 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
         subject_hash = %subject_hash(&user.id),
         "authorization code exchanged"
     );
-    // The nonce the authorization request carried, if it carried one.
-    let nonce = payload.get("nonce").and_then(Value::as_str);
+    // The ID token is issued only when the request asked for `openid`, and
+    // carries the nonce the request sent, if it sent one.
+    let id_token = if payload.get("openid").and_then(Value::as_bool) == Some(true) {
+        IdToken::Issue {
+            nonce: payload.get("nonce").and_then(Value::as_str),
+        }
+    } else {
+        IdToken::Omit
+    };
     mint_pair(
         db,
         clock,
@@ -432,7 +437,7 @@ async fn code_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Respon
         &session,
         &user,
         client_id,
-        nonce,
+        id_token,
     )
     .await
 }

@@ -25,6 +25,8 @@ pub enum VerifyError {
     BadHeader,
     #[error("algorithm {0} is not accepted; only {ALGORITHM} is")]
     Algorithm(String),
+    #[error("token type is {0:?}, expected at+jwt: only access tokens are accepted")]
+    Type(String),
     #[error("no key with id {0} is published by the issuer")]
     UnknownKey(String),
     #[error("signature does not verify")]
@@ -72,9 +74,34 @@ pub struct Claims {
     /// claim existed.
     #[serde(default)]
     pub sso_connection: Option<String>,
+    /// When the person last authenticated in a real ceremony, epoch seconds
+    /// (issue #912). `None` only for a token minted before the claim
+    /// existed, which [`Claims::authenticated_within`] treats as not fresh.
+    #[serde(default)]
+    pub auth_time: Option<i64>,
+    /// The account's roles in the issuing instance (issue #912), present
+    /// only for a client the instance registered to receive them. Empty
+    /// otherwise.
+    #[serde(default)]
+    pub roles: Vec<String>,
 }
 
 impl Claims {
+    /// Whether the person authenticated within the last `max_age_secs`
+    /// seconds, measured from `now` (epoch seconds, taken from the caller's
+    /// clock). `false` when the token has no `auth_time`.
+    ///
+    /// A relying party that is about to approve something checks this itself.
+    /// Verification establishes who signed the token, not how recently the
+    /// person proved who they are.
+    #[must_use]
+    pub fn authenticated_within(&self, max_age_secs: i64, now: i64) -> bool {
+        self.auth_time.is_some_and(|at| {
+            let age = now - at;
+            age >= -LEEWAY_SECS && age <= max_age_secs
+        })
+    }
+
     /// Whether this token came through one specific enterprise SSO
     /// connection, as opposed to any other way in.
     ///
@@ -89,10 +116,17 @@ impl Claims {
     }
 }
 
+/// The one `typ` an access token carries (RFC 9068). An ID token is signed
+/// by the same key and has the same `aud`, so without this check it would
+/// verify as an access token.
+pub(crate) const ACCESS_TOKEN_TYPE: &str = "at+jwt";
+
 #[derive(Deserialize)]
 struct Header {
     alg: String,
     kid: String,
+    #[serde(default)]
+    typ: Option<String>,
 }
 
 /// The `kid` a token names, without verifying anything.
@@ -140,6 +174,12 @@ pub(crate) fn verify_with(
     // never gets the chance.
     if header.alg != ALGORITHM {
         return Err(VerifyError::Algorithm(header.alg));
+    }
+    // Then the type: this crate verifies access tokens. An ID token has the
+    // same signature and audience, and is refused here, before its claims
+    // are read as if they were an access token's.
+    if header.typ.as_deref() != Some(ACCESS_TOKEN_TYPE) {
+        return Err(VerifyError::Type(header.typ.unwrap_or_default()));
     }
 
     let key = keys
