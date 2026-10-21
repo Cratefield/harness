@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/Cratefield/harness/compare/cratefield-module-device-auth-v0.3.2...cratefield-module-device-auth-v0.3.3) - 2026-10-21
+
+### Fixed
+
+- validate Location header in device-auth module to prevent CRLF injection ([#907](https://github.com/Cratefield/harness/pull/907)) ([#907](https://github.com/Cratefield/harness/pull/907))
+
 ## [0.3.2](https://github.com/Cratefield/harness/compare/cratefield-module-device-auth-v0.3.1...cratefield-module-device-auth-v0.3.2) - 2026-10-19
 
 ### Other
