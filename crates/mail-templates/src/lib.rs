@@ -471,9 +471,13 @@ style=\"background:{card};{card_edges};padding:36px 40px;font-family:{font}\">\
             if self.fallback_link || !is_linkable(url) {
                 let shown = if is_linkable(url) {
                     format!(
-                        "<a class=\"cf-link\" href=\"{u}\" style=\"color:{accent};text-decoration:underline\">{u}</a>",
+                        // Marked on the button colour so a light brand accent (lime,
+                        // yellow) stays readable on a white card.
+                        "<a class=\"cf-link\" href=\"{u}\" style=\"color:{fg};background:{bg};padding:2px 6px;border-radius:4px;\
+-webkit-box-decoration-break:clone;box-decoration-break:clone;word-break:break-all;line-height:26px;text-decoration:underline\">{u}</a>",
                         u = e(url),
-                        accent = l.accent,
+                        fg = marked_link_ink(&l.accent, &l.button, &l.button_text),
+                        bg = l.button,
                     )
                 } else {
                     format!(
@@ -689,6 +693,39 @@ style=\"display:block;width:{w}px;height:{hgt}px;border:0;outline:none;text-deco
     }
 }
 
+/// The text colour for the fallback link, marked on `button`: the brand
+/// accent when it reads on the button (contrast 4.5:1 or more), else the
+/// button's own text colour.
+fn marked_link_ink<'a>(accent: &'a str, button: &'a str, button_text: &'a str) -> &'a str {
+    match (luminance(accent), luminance(button)) {
+        (Some(a), Some(b)) if contrast(a, b) >= 4.5 => accent,
+        _ => button_text,
+    }
+}
+
+fn luminance(hex: &str) -> Option<f64> {
+    let h = hex.strip_prefix('#')?;
+    let h: String = match h.len() {
+        3 => h.chars().flat_map(|c| [c, c]).collect(),
+        6 => h.to_owned(),
+        _ => return None,
+    };
+    let channel = |i: usize| -> Option<f64> {
+        let v = f64::from(u8::from_str_radix(&h[i..i + 2], 16).ok()?) / 255.0;
+        Some(if v <= 0.039_28 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        })
+    };
+    Some(0.2126 * channel(0)? + 0.7152 * channel(2)? + 0.0722 * channel(4)?)
+}
+
+fn contrast(a: f64, b: f64) -> f64 {
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
 fn code_span(theme: &MailTheme, value: &str) -> String {
     let l = &theme.light;
     format!(
@@ -730,7 +767,7 @@ a[x-apple-data-detectors]{{color:inherit!important;text-decoration:none!importan
 .cf-rule{{border-color:{border}!important}}\
 .cf-btn{{background:{button}!important}}\
 .cf-btn-a{{color:{button_text}!important}}\
-.cf-link{{color:{accent}!important}}\
+.cf-link{{color:{link_fg}!important;background:{button}!important}}\
 }}",
         bg = d.bg,
         card = d.card,
@@ -741,7 +778,7 @@ a[x-apple-data-detectors]{{color:inherit!important;text-decoration:none!importan
         code_bg = d.code_bg,
         button = d.button,
         button_text = d.button_text,
-        accent = d.accent,
+        link_fg = marked_link_ink(&d.accent, &d.button, &d.button_text),
     ) + if theme.header_bg.is_some() {
         // The band narrows with the card on a phone.
         "@media (max-width:620px){.cf-band{padding:16px 20px!important}}"
@@ -822,6 +859,16 @@ mod tests {
         );
         assert_eq!(escape("a\r\nb"), "a  b");
         assert_eq!(plain("a\r\nBcc: x"), "a  Bcc: x");
+    }
+
+    #[test]
+    fn the_fallback_link_is_marked_and_readable() {
+        // A lime accent reads on a near-black button: the link keeps it.
+        assert_eq!(marked_link_ink("#C6F432", "#18181B", "#FFFFFF"), "#C6F432");
+        // A dark accent would vanish on the dark mark: the button text is used.
+        assert_eq!(marked_link_ink("#0E1526", "#18181B", "#FFFFFF"), "#FFFFFF");
+        // Not a colour at all: fall back to the button text.
+        assert_eq!(marked_link_ink("lime", "#18181B", "#FFFFFF"), "#FFFFFF");
     }
 
     #[test]
