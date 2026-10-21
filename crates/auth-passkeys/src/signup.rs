@@ -15,9 +15,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use cratefield_auth_core::{
-    Login, UserRow, insert_user, issue as issue_session, passkey_by_credential_id,
-};
+use cratefield_auth_core::{Login, UserRow, issue as issue_session, passkey_by_credential_id};
 use cratefield_core::{Problem, ProblemDef, Scope};
 use serde::Deserialize;
 use serde_json::json;
@@ -29,7 +27,7 @@ use webauthn_rs_proto::{
 };
 
 use crate::challenge::{self, PURPOSE_SIGNUP};
-use crate::register::{challenge_from_client_data, store_credential, transports_of};
+use crate::register::{challenge_from_client_data, transports_of};
 use crate::request::{ceremony_failed, internal, ok, ports};
 use crate::webauthn::{UserVerification, verify_registration};
 use crate::{COSE_EDDSA, COSE_ES256, COSE_RS256, ModuleState};
@@ -263,27 +261,21 @@ async fn verify(
     }
 
     let now = crate::iso(clock.now());
-    insert_user(
-        db,
-        &UserRow {
-            id: user_id.clone(),
-            display_name: display_name_of(body.display_name.as_deref()),
-            primary_email: None,
-            primary_email_verified: false,
-            locale: None,
-            status: cratefield_auth_core::STATUS_ACTIVE.to_owned(),
-            created_at: now.clone(),
-            updated_at: now.clone(),
-        },
-    )
-    .await
-    .map_err(|_| internal(&scope))?;
+    let user = UserRow {
+        id: user_id.clone(),
+        display_name: display_name_of(body.display_name.as_deref()),
+        primary_email: None,
+        primary_email_verified: false,
+        locale: None,
+        status: cratefield_auth_core::STATUS_ACTIVE.to_owned(),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+    };
     // The first passkey of a new account: no change to a quiet period, because
     // there is nothing yet to be quiet about (issue #914).
-    store_credential(
-        db,
-        id_gen,
+    let credential = credential_row(
         &user_id,
+        id_gen.ulid(),
         &registered,
         transports_of(&body.credential),
         body.label
@@ -291,20 +283,23 @@ async fn verify(
             .map(str::trim)
             .filter(|l| !l.is_empty()),
         &now,
-    )
-    .await
-    .map_err(|_| internal(&scope))?;
-    cratefield_auth_core::record_terms(
+    );
+    // The account, its passkey, the terms and the recovery codes are one batch:
+    // either all of them exist afterwards or none does. A concurrent sign-up with
+    // the same authenticator fails the batch on the credential, and leaves nothing.
+    let codes = cratefield_auth_core::create_passkey_account(
         db,
         clock,
         id_gen,
-        &user_id,
-        &terms_version,
-        &privacy_version,
+        &user,
+        &credential,
+        (&terms_version, &privacy_version),
     )
     .await
-    .map_err(|_| internal(&scope))?;
-    let codes = cratefield_auth_core::issue_recovery_codes(db, clock, id_gen, &user_id).await?;
+    .map_err(|err| {
+        tracing::warn!(error = %err, "sign-up batch refused");
+        ceremony_failed(&scope)
+    })?;
 
     let mut amr = vec!["passkey", "user"];
     if registered.user_verified {
@@ -348,4 +343,34 @@ pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
         .route("/signup/options", post(options))
         .route("/signup/verify", post(verify))
+}
+
+/// The passkey row for a new account's first credential.
+fn credential_row(
+    user_id: &str,
+    credential_id: String,
+    registered: &crate::webauthn::RegisteredCredential,
+    transports: Option<String>,
+    label: Option<&str>,
+    now: &str,
+) -> cratefield_auth_core::CredentialRow {
+    use cratefield_auth_core::{Bytes, CREDENTIAL_PASSKEY, CredentialRow};
+    CredentialRow {
+        id: credential_id,
+        user_id: user_id.to_owned(),
+        kind: CREDENTIAL_PASSKEY.to_owned(),
+        passkey_credential_id: Some(Bytes(registered.credential_id.clone())),
+        passkey_public_key_cose: Some(Bytes(registered.cose_key_raw.clone())),
+        passkey_sign_count: Some(i64::from(registered.sign_count)),
+        passkey_aaguid: registered.aaguid.map(|id| Bytes(id.to_vec())),
+        passkey_transports: transports,
+        password_hash: None,
+        label: label.map(str::to_owned),
+        created_at: now.to_owned(),
+        last_used_at: None,
+        passkey_suspect_at: None,
+        failed_attempts: 0,
+        failed_window_started_at: None,
+        locked_until: None,
+    }
 }

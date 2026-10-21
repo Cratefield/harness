@@ -4,43 +4,64 @@
 //! anonymous request to this module passes first (rate limit, captcha).
 //!
 //! Nothing here requires an email address. An account with none keeps every
-//! path open to it that a passkey can open: sign-in, step-up, and account
-//! changes made with a passkey ceremony (see the README's sign-up section).
+//! path a passkey can open (see the README's sign-up section).
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use cratefield_core::{Clock, Config, Database, IdGen, Json, ModuleConfig, Problem, Scope};
+use cratefield_core::{
+    Clock, Config, Database, DbError, IdGen, Json, ModuleConfig, ModuleContext, Problem, Scope,
+    constant_time_eq,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use crate::ModuleState;
-use crate::secrets::{hash_password, verify_password};
 use crate::store::{self, RecoveryCodeRow, STATUS_ACTIVE};
 
 /// How many recovery codes an account is given at sign-up and each time it
 /// regenerates them.
 pub const RECOVERY_CODE_COUNT: usize = 10;
 
-/// The alphabet a recovery code is drawn from: no `0`, `O`, `1` or `I`, so a
-/// code read off a page is not mistyped. 32 symbols divide 256 evenly, so a
-/// byte maps to one of them without bias.
+/// Symbols in a code's public lookup half, and in its secret half.
+const LOOKUP_SYMBOLS: usize = 8;
+const SECRET_SYMBOLS: usize = 16;
+
+/// The alphabet a code is drawn from: no `0`, `O`, `1` or `I`. 32 symbols
+/// divide 256 evenly, so a byte maps to one of them without bias.
 const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /// The config keys the terms an account accepts are read from.
 pub(crate) const TERMS_VERSION_KEY: &str = "TERMS_VERSION";
 pub(crate) const PRIVACY_VERSION_KEY: &str = "PRIVACY_VERSION";
 
-/// A recovery code or account that does not check out. One answer for both,
-/// so the response does not say whether the account exists.
+/// The one answer for every recovery refusal: a wrong code, an unknown code, a
+/// spent one, an unknown account, a missing captcha. It says nothing about which.
 pub const RECOVERY_REFUSED: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
     slug: "auth/recovery-refused",
     status: axum::http::StatusCode::UNAUTHORIZED,
     title: "Recovery refused",
-    description: "The account and code did not match a live recovery code",
+    description: "The recovery code did not match a live code",
 };
+
+/// The hash a lookup with no matching row is checked against, so an unknown
+/// code does the same work as a wrong one.
+fn dummy_hash() -> String {
+    sha256_hex(b"no recovery code has this secret")
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
 
 /// The terms and privacy versions this deployment asks sign-up to accept.
 /// `None` when either is unset: sign-up is then refused, because nothing can
@@ -56,7 +77,7 @@ pub fn terms_versions(cfg: &dyn Config) -> Option<(String, String)> {
 }
 
 /// The limiter's answer for an anonymous request. Callers fail closed on
-/// anything but `Allow` (issue #914).
+/// anything but `Allow`.
 #[derive(Debug)]
 pub enum Guard {
     /// The caller is within its limit.
@@ -68,11 +89,7 @@ pub enum Guard {
 }
 
 /// Checks the caller's address against the limiter, under `bucket`.
-pub async fn guard_anonymous(
-    ctx: &cratefield_core::ModuleContext,
-    headers: &HeaderMap,
-    bucket: &str,
-) -> Guard {
+pub async fn guard_anonymous(ctx: &ModuleContext, headers: &HeaderMap, bucket: &str) -> Guard {
     let Some(limiter) = ctx.ports.rate_limiter.as_deref() else {
         return Guard::Failed;
     };
@@ -90,16 +107,12 @@ pub async fn guard_anonymous(
     Guard::Allow
 }
 
-/// Whether the captcha accepts this request. A deployment with no captcha
-/// port accepts it; one whose captcha cannot be reached refuses it (fail
-/// closed), as the magic link's send does.
-pub async fn captcha_passes(
-    ctx: &cratefield_core::ModuleContext,
-    token: Option<&str>,
-    headers: &HeaderMap,
-) -> bool {
+/// Whether the captcha accepts this request. Sign-up and recovery require a
+/// captcha: with no captcha port, or one that cannot be reached, they refuse
+/// (fail closed, issue #914).
+pub async fn captcha_passes(ctx: &ModuleContext, token: Option<&str>, headers: &HeaderMap) -> bool {
     let Some(captcha) = ctx.ports.captcha.as_deref() else {
-        return true;
+        return false;
     };
     let ip = cratefield_core::client_ip(headers);
     match captcha
@@ -114,115 +127,178 @@ pub async fn captcha_passes(
     }
 }
 
-/// Sign-up, and recovery, present a code the way a person types it:
-/// upper-cased, with the separators and spaces dropped.
-fn normalize_code(presented: &str) -> String {
-    presented
+/// Presents a code the way a person types it: upper-cased, with separators and
+/// spaces dropped. Returns the lookup half and the secret half, or `None` when
+/// the length is wrong. Callers still do the same work either way.
+fn split_code(presented: &str) -> (String, String) {
+    let normalized: String = presented
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '-')
         .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let lookup: String = normalized.chars().take(LOOKUP_SYMBOLS).collect();
+    let secret: String = normalized.chars().skip(LOOKUP_SYMBOLS).collect();
+    (lookup, secret)
+}
+
+/// One freshly drawn code, as shown to the person and as stored.
+pub(crate) struct DrawnCode {
+    /// What the person is shown: `LOOKUP-LOOKUP-SECRET-SECRET-SECRET-SECRET`.
+    pub display: String,
+    pub lookup: String,
+    /// The secret half, which is never stored: only its hash is.
+    secret: String,
+}
+
+fn symbols(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| char::from(CODE_ALPHABET[usize::from(*b) % 32]))
         .collect()
 }
 
-/// Draws `RECOVERY_CODE_COUNT` codes, each 16 symbols in four groups.
-fn fresh_codes() -> Result<Vec<String>, Problem> {
+/// Draws `RECOVERY_CODE_COUNT` codes from the OS entropy source.
+///
+/// # Errors
+///
+/// [`DbError::Batch`] when the entropy source fails, so the caller's batch is
+/// never started.
+fn draw_codes() -> Result<Vec<DrawnCode>, DbError> {
     let mut codes = Vec::with_capacity(RECOVERY_CODE_COUNT);
     for _ in 0..RECOVERY_CODE_COUNT {
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|err| {
-            tracing::error!(error = %err, "no entropy for recovery codes");
-            Problem::internal()
-        })?;
-        let symbols: String = bytes
-            .iter()
-            .map(|b| char::from(CODE_ALPHABET[usize::from(*b) % 32]))
-            .collect();
-        codes.push(format!(
-            "{}-{}-{}-{}",
-            &symbols[0..4],
-            &symbols[4..8],
-            &symbols[8..12],
-            &symbols[12..16]
-        ));
+        let mut bytes = [0u8; LOOKUP_SYMBOLS + SECRET_SYMBOLS];
+        getrandom::fill(&mut bytes).map_err(|err| DbError::Batch(err.to_string()))?;
+        let all = symbols(&bytes);
+        let (lookup, secret) = all.split_at(LOOKUP_SYMBOLS);
+        let display = format!(
+            "{}-{}-{}-{}-{}-{}",
+            &lookup[0..4],
+            &lookup[4..8],
+            &secret[0..4],
+            &secret[4..8],
+            &secret[8..12],
+            &secret[12..16]
+        );
+        codes.push(DrawnCode {
+            display,
+            lookup: lookup.to_owned(),
+            secret: secret.to_owned(),
+        });
     }
     Ok(codes)
 }
 
+/// The stored row for a drawn code.
+fn code_row(id: String, user_id: &str, code: &DrawnCode, now: &str) -> RecoveryCodeRow {
+    RecoveryCodeRow {
+        id,
+        lookup_id: code.lookup.clone(),
+        user_id: user_id.to_owned(),
+        code_hash: sha256_hex(code.secret.as_bytes()),
+        created_at: now.to_owned(),
+        used_at: None,
+    }
+}
+
 /// Replaces the account's recovery codes with a fresh set, and returns the
-/// plain codes. They are shown once: only Argon2id hashes are stored, and the
-/// old set, spent or not, is gone.
+/// codes as they are shown, once. The old set, spent or not, stops working.
 ///
 /// # Errors
 ///
-/// [`Problem`] when hashing or a write fails.
+/// [`DbError`] when drawing or writing the codes fails.
 pub async fn issue_recovery_codes(
     db: &dyn Database,
     clock: &dyn Clock,
     id_gen: &dyn IdGen,
     user_id: &str,
-) -> Result<Vec<String>, Problem> {
-    let codes = fresh_codes()?;
+) -> Result<Vec<String>, DbError> {
+    let drawn = draw_codes()?;
     let now = crate::sessions::iso(clock.now());
-    store::delete_recovery_codes(db, user_id)
-        .await
-        .map_err(|_| Problem::internal())?;
-    for code in &codes {
-        let hash = hash_password(&normalize_code(code)).map_err(|err| {
-            tracing::error!(error = %err, "could not hash a recovery code");
-            Problem::internal()
-        })?;
-        store::insert_recovery_code(
-            db,
-            &RecoveryCodeRow {
-                id: id_gen.ulid(),
-                user_id: user_id.to_owned(),
-                code_hash: hash,
-                created_at: now.clone(),
-            },
-        )
-        .await
-        .map_err(|_| Problem::internal())?;
+    let mut statements = vec![store::delete_recovery_codes_statement(user_id)];
+    for code in &drawn {
+        statements.push(store::insert_recovery_code_statement(&code_row(
+            id_gen.ulid(),
+            user_id,
+            code,
+            &now,
+        )));
     }
-    Ok(codes)
+    db.batch_atomic(&statements).await?;
+    Ok(drawn.into_iter().map(|code| code.display).collect())
 }
 
-/// Spends the recovery code that matches `presented`, if the account holds
-/// one. Returns whether a code was spent.
+/// Creates a passkey-first account in one atomic batch: the user row, the
+/// passkey, the terms accepted, and the recovery codes. A failure anywhere
+/// (including the passkey already existing, which a concurrent sign-up with the
+/// same authenticator can cause) leaves none of them behind. Returns the codes
+/// as they are shown, once.
 ///
 /// # Errors
 ///
-/// [`Problem`] when a read or the spend fails.
-pub(crate) async fn spend_recovery_code(
+/// [`DbError`] when the batch fails.
+pub async fn create_passkey_account(
     db: &dyn Database,
     clock: &dyn Clock,
-    user_id: &str,
-    presented: &str,
-) -> Result<bool, Problem> {
-    let normalized = normalize_code(presented);
-    if normalized.is_empty() {
-        return Ok(false);
+    id_gen: &dyn IdGen,
+    user: &crate::store::UserRow,
+    credential: &crate::store::CredentialRow,
+    terms: (&str, &str),
+) -> Result<Vec<String>, DbError> {
+    let drawn = draw_codes()?;
+    let now = crate::sessions::iso(clock.now());
+    let mut statements = vec![
+        store::insert_user_statement(user),
+        store::insert_credential_statement(credential),
+        store::insert_terms_acceptance_statement(&id_gen.ulid(), &user.id, terms.0, terms.1, &now),
+    ];
+    for code in &drawn {
+        statements.push(store::insert_recovery_code_statement(&code_row(
+            id_gen.ulid(),
+            &user.id,
+            code,
+            &now,
+        )));
     }
-    let rows = store::unused_recovery_codes(db, user_id)
+    db.batch_atomic(&statements).await?;
+    Ok(drawn.into_iter().map(|code| code.display).collect())
+}
+
+/// Spends the code that `presented` names, if it names one that belongs to
+/// `sub` and has not been spent, and returns whether it was spent. The work is
+/// the same for every input: one lookup, one hash, one compare.
+async fn spend_code(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    presented: &str,
+) -> Result<Option<RecoveryCodeRow>, Problem> {
+    let (lookup, secret) = split_code(presented);
+    let row = store::recovery_code_by_lookup(db, &lookup)
         .await
         .map_err(|_| Problem::internal())?;
-    for row in rows {
-        if verify_password(&normalized, &row.code_hash) {
-            let now = crate::sessions::iso(clock.now());
-            // Of two requests racing on one code, exactly one spends it.
-            let spent = store::spend_recovery_code(db, &row.id, &now)
-                .await
-                .map_err(|_| Problem::internal())?;
-            return Ok(spent == 1);
-        }
+    let expected = row
+        .as_ref()
+        .map_or_else(dummy_hash, |row| row.code_hash.clone());
+    let presented_hash = sha256_hex(secret.as_bytes());
+    let matches = constant_time_eq(presented_hash.as_bytes(), expected.as_bytes());
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    if !matches || row.used_at.is_some() || secret.len() != SECRET_SYMBOLS {
+        return Ok(None);
     }
-    Ok(false)
+    let now = crate::sessions::iso(clock.now());
+    // Of two requests racing on one code, exactly one spends it.
+    let spent = store::spend_recovery_code(db, &row.id, &now)
+        .await
+        .map_err(|_| Problem::internal())?;
+    Ok((spent == 1).then_some(row))
 }
 
 /// Records an in-app security notice for the account.
 ///
 /// # Errors
 ///
-/// [`cratefield_core::DbError`] when the write fails.
+/// [`DbError`] when the write fails.
 pub async fn record_notice(
     db: &dyn Database,
     clock: &dyn Clock,
@@ -230,34 +306,9 @@ pub async fn record_notice(
     user_id: &str,
     kind: &str,
     detail: &str,
-) -> Result<(), cratefield_core::DbError> {
+) -> Result<(), DbError> {
     let now = crate::sessions::iso(clock.now());
     store::insert_security_notice(db, &id_gen.ulid(), user_id, kind, detail, &now).await
-}
-
-/// Records the terms and privacy versions an account accepted at sign-up.
-///
-/// # Errors
-///
-/// [`cratefield_core::DbError`] when the write fails.
-pub async fn record_terms(
-    db: &dyn Database,
-    clock: &dyn Clock,
-    id_gen: &dyn IdGen,
-    user_id: &str,
-    terms_version: &str,
-    privacy_version: &str,
-) -> Result<(), cratefield_core::DbError> {
-    let now = crate::sessions::iso(clock.now());
-    store::insert_terms_acceptance(
-        db,
-        &id_gen.ulid(),
-        user_id,
-        terms_version,
-        privacy_version,
-        &now,
-    )
-    .await
 }
 
 fn internal(scope: &Scope) -> Problem {
@@ -295,16 +346,24 @@ fn refused_anonymous(scope: &Scope, guard: Guard) -> Option<Response> {
 
 #[derive(Deserialize)]
 struct RedeemBody {
-    sub: String,
     recovery_code: String,
     #[serde(default, rename = "captchaToken")]
     captcha_token: Option<String>,
+    /// Revoke every other session of the account when the code is used.
+    /// On by default: a code used after a stolen session is the moment to end it.
+    #[serde(default = "default_true")]
+    sign_out_other_sessions: bool,
 }
 
-/// `POST /recovery/redeem`: sign back in with an account id and one of its
-/// recovery codes. The session it earns carries the `recovery` method, which
-/// can enrol a passkey and nothing else; it starts the 24-hour quiet period,
-/// and the account is told in the app and by mail where it has an address.
+fn default_true() -> bool {
+    true
+}
+
+/// `POST /recovery/redeem`: sign back in with a recovery code, which names its
+/// account. The session it earns carries the `recovery` method, which can enrol
+/// a passkey and nothing else (the authorization endpoint treats it as signed
+/// out). The redeem starts the 24-hour quiet period, signs the account's other
+/// sessions out unless the caller asks not to, and tells the account.
 async fn redeem(
     scope: Scope,
     State(state): State<Arc<ModuleState>>,
@@ -318,18 +377,30 @@ async fn redeem(
     ) {
         return Ok(response);
     }
-    if !captcha_passes(&state.ctx, body.captcha_token.as_deref(), &headers).await {
-        return Err(Problem::new(&RECOVERY_REFUSED).instance(&scope.request_id));
-    }
     let refused = || Problem::new(&RECOVERY_REFUSED).instance(&scope.request_id);
-    let user = store::user_by_id(db, &body.sub)
+    if !captcha_passes(&state.ctx, body.captcha_token.as_deref(), &headers).await {
+        return Err(refused());
+    }
+    let Some(code) = spend_code(db, clock, &body.recovery_code).await? else {
+        return Err(refused());
+    };
+    let user = store::user_by_id(db, &code.user_id)
         .await
         .map_err(|_| internal(&scope))?
         .filter(|user| user.status == STATUS_ACTIVE)
         .ok_or_else(refused)?;
-    if !spend_recovery_code(db, clock, &user.id, &body.recovery_code).await? {
-        return Err(refused());
-    }
+    let now = crate::sessions::iso(clock.now());
+    let signed_out = if body.sign_out_other_sessions {
+        let sessions = store::revoke_all_sessions(db, &user.id, &now)
+            .await
+            .map_err(|_| internal(&scope))?;
+        store::retire_unconsumed_tokens(db, store::TOKEN_REFRESH, &user.id, &now)
+            .await
+            .map_err(|_| internal(&scope))?;
+        sessions
+    } else {
+        0
+    };
     let ip = cratefield_core::client_ip(&headers);
     let issued = crate::sessions::issue(
         db,
@@ -356,7 +427,12 @@ async fn redeem(
         "A recovery code was used to sign in to your account. If that was not you, sign in and change your passkeys now.",
     )
     .await;
-    let mut response = Json(json!({ "sub": user.id, "status": "signed_in" })).into_response();
+    let mut response = Json(json!({
+        "sub": user.id,
+        "status": "signed_in",
+        "sessions_signed_out": signed_out,
+    }))
+    .into_response();
     if let Ok(cookie) = axum::http::HeaderValue::from_str(&issued.cookie) {
         response
             .headers_mut()
@@ -365,8 +441,8 @@ async fn redeem(
     Ok(response)
 }
 
-/// `POST /recovery/codes`: a new set of recovery codes, shown once. Asks for
-/// a fresh passkey or email ceremony, so a stolen session cannot take the
+/// `POST /recovery/codes`: a new set of recovery codes, shown once. Asks for a
+/// fresh passkey or email ceremony, so a stolen session cannot take the
 /// account's way back in. The old set stops working.
 async fn regenerate(
     scope: Scope,
@@ -377,7 +453,9 @@ async fn regenerate(
     crate::authorize::require_recent_ceremony(db, clock, &session.id, &session.user_id)
         .await
         .map_err(|problem| problem.instance(&scope.request_id))?;
-    let codes = issue_recovery_codes(db, clock, id_gen, &session.user_id).await?;
+    let codes = issue_recovery_codes(db, clock, id_gen, &session.user_id)
+        .await
+        .map_err(|_| internal(&scope))?;
     crate::email::notify_account(
         &state.ctx,
         &session.user_id,

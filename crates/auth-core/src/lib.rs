@@ -46,8 +46,8 @@ pub mod csrf;
 /// routes, their mail, and the problem codes they answer with.
 pub mod email;
 pub use account::{
-    Guard, RECOVERY_CODE_COUNT, RECOVERY_REFUSED, captcha_passes, guard_anonymous,
-    issue_recovery_codes, record_notice, record_terms, terms_versions,
+    Guard, RECOVERY_CODE_COUNT, RECOVERY_REFUSED, captcha_passes, create_passkey_account,
+    guard_anonymous, issue_recovery_codes, record_notice, terms_versions,
 };
 pub use email::{
     ConfirmMail, EMAIL_CHANGE_TTL_SECS, EVENT_EMAIL_CHANGED, NoticeMail, REAUTHENTICATION_REQUIRED,
@@ -350,6 +350,14 @@ const MIGRATION_PASSKEY_FIRST_SIGNUP: SqlMigration = SqlMigration::new(
     "0017",
     "passkey_first_signup",
     include_str!("../migrations/sqlite/0017_passkey_first_signup.sql"),
+);
+
+/// The recovery-code lookup of issue #914's security review: a public lookup id
+/// finds one row, and the secret is stored as SHA-256 rather than Argon2.
+const MIGRATION_RECOVERY_LOOKUP: SqlMigration = SqlMigration::new(
+    "0018",
+    "recovery_lookup",
+    include_str!("../migrations/sqlite/0018_recovery_lookup.sql"),
 );
 
 /// Router state: the module context and the resolved rotation overlap.
@@ -721,7 +729,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 17] = [
+        const MIGRATIONS: [SqlMigration; 18] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -739,6 +747,7 @@ impl Module for AuthCore {
             MIGRATION_STEP_UP_HARDENING,
             MIGRATION_STEP_UP_ACR_IN_CODES,
             MIGRATION_PASSKEY_FIRST_SIGNUP,
+            MIGRATION_RECOVERY_LOOKUP,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -749,7 +758,7 @@ impl Module for AuthCore {
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 17] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 18] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -767,6 +776,7 @@ impl Module for AuthCore {
             MIGRATION_STEP_UP_HARDENING_POSTGRES,
             MIGRATION_STEP_UP_ACR_IN_CODES,
             MIGRATION_PASSKEY_FIRST_SIGNUP,
+            MIGRATION_RECOVERY_LOOKUP,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -877,6 +887,14 @@ impl Module for AuthCore {
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
+        // Passkey-first sign-up and recovery are anonymous writes, and they refuse
+        // without a captcha (issue #914). A deployment that enables them with no
+        // captcha port is logged loudly at boot; each request is then refused.
+        if account::terms_versions(&*ctx.config).is_some() && ctx.ports.captcha.is_none() {
+            tracing::error!(
+                "sign-up and recovery are enabled (terms versions are set) but no captcha port is configured; every request to them is refused"
+            );
+        }
         let keys = match tokens::SigningKeys::from_config(&*ctx.config) {
             Ok(keys) => keys.map(Arc::new),
             // `validate_config` reports this at doctor time; at runtime
@@ -1035,7 +1053,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 17);
+        assert_eq!(migrations.sqlite.len(), 18);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -1070,10 +1088,12 @@ mod tests {
         assert_eq!(migrations.sqlite[15].name, "step_up_acr_in_codes");
         assert_eq!(migrations.sqlite[16].id, "0017");
         assert_eq!(migrations.sqlite[16].name, "passkey_first_signup");
+        assert_eq!(migrations.sqlite[17].id, "0018");
+        assert_eq!(migrations.sqlite[17].name, "recovery_lookup");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 17);
+        assert_eq!(migrations.postgres.len(), 18);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);
@@ -1138,6 +1158,10 @@ mod tests {
         assert_eq!(
             migrations.postgres[16].sql, migrations.sqlite[16].sql,
             "the sign-up tables are portable DDL, so Postgres reuses the sqlite file"
+        );
+        assert_eq!(
+            migrations.postgres[17].sql, migrations.sqlite[17].sql,
+            "the recovery lookup is portable DDL, so Postgres reuses the sqlite file"
         );
         assert_eq!(
             migrations.postgres[6].sql, migrations.sqlite[6].sql,

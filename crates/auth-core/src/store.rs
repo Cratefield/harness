@@ -195,12 +195,7 @@ fn select_users() -> sea_query::SelectStatement {
     select
 }
 
-/// Inserts a user.
-///
-/// # Errors
-///
-/// [`DbError::Execute`] when the statement fails (e.g. a duplicate id).
-pub async fn insert_user(db: &dyn Database, row: &UserRow) -> Result<(), DbError> {
+pub(crate) fn insert_user_statement(row: &UserRow) -> Statement {
     let mut insert = Query::insert();
     insert
         .into_table(iden("users"))
@@ -224,7 +219,16 @@ pub async fn insert_user(db: &dyn Database, row: &UserRow) -> Result<(), DbError
             row.created_at.clone().into(),
             row.updated_at.clone().into(),
         ]);
-    db.execute(&Statement::render(&insert)).await?;
+    Statement::render(&insert)
+}
+
+/// Inserts a user.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails (e.g. a duplicate id).
+pub async fn insert_user(db: &dyn Database, row: &UserRow) -> Result<(), DbError> {
+    db.execute(&insert_user_statement(row)).await?;
     Ok(())
 }
 
@@ -573,13 +577,7 @@ fn select_credentials() -> sea_query::SelectStatement {
     select
 }
 
-/// Inserts a credential.
-///
-/// # Errors
-///
-/// [`DbError::Execute`] when the statement fails, including a duplicate
-/// `passkey_credential_id`.
-pub async fn insert_credential(db: &dyn Database, row: &CredentialRow) -> Result<(), DbError> {
+pub(crate) fn insert_credential_statement(row: &CredentialRow) -> Statement {
     let mut insert = Query::insert();
     insert
         .into_table(iden("credentials"))
@@ -620,7 +618,17 @@ pub async fn insert_credential(db: &dyn Database, row: &CredentialRow) -> Result
             row.created_at.clone().into(),
             row.last_used_at.clone().into(),
         ]);
-    db.execute(&Statement::render(&insert)).await?;
+    Statement::render(&insert)
+}
+
+/// Inserts a credential.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails, including a duplicate
+/// `passkey_credential_id`.
+pub async fn insert_credential(db: &dyn Database, row: &CredentialRow) -> Result<(), DbError> {
+    db.execute(&insert_credential_statement(row)).await?;
     Ok(())
 }
 
@@ -2525,61 +2533,71 @@ pub(crate) async fn open_unbound_step_ups(
 #[derive(Debug, Clone)]
 pub(crate) struct RecoveryCodeRow {
     pub id: String,
+    /// The public half of the code: finds this row and no other.
+    pub lookup_id: String,
     pub user_id: String,
+    /// Hex SHA-256 of the secret half. The secret is never stored.
     pub code_hash: String,
     pub created_at: String,
+    pub used_at: Option<String>,
 }
 
-/// Records one recovery code (as its hash).
-///
-/// # Errors
-///
-/// [`DbError::Execute`] when the statement fails.
-pub(crate) async fn insert_recovery_code(
-    db: &dyn Database,
-    row: &RecoveryCodeRow,
-) -> Result<(), DbError> {
+pub(crate) fn insert_recovery_code_statement(row: &RecoveryCodeRow) -> Statement {
     let mut insert = Query::insert();
     insert
         .into_table(iden("recovery_codes"))
-        .columns(["id", "user_id", "code_hash", "created_at", "used_at"])
+        .columns([
+            "id",
+            "lookup_id",
+            "user_id",
+            "code_hash",
+            "created_at",
+            "used_at",
+        ])
         .values_panic([
             row.id.clone().into(),
+            row.lookup_id.clone().into(),
             row.user_id.clone().into(),
             row.code_hash.clone().into(),
             row.created_at.clone().into(),
             Option::<String>::None.into(),
         ]);
-    db.execute(&Statement::render(&insert)).await?;
-    Ok(())
+    Statement::render(&insert)
 }
 
-/// The account's unspent recovery codes.
+/// The recovery code a lookup id names, spent or not. The public lookup id
+/// finds at most one row, so a sign-in does one read and one hash whatever the
+/// account behind it is.
 ///
 /// # Errors
 ///
 /// [`DbError::Query`] when the statement fails.
-pub(crate) async fn unused_recovery_codes(
+pub(crate) async fn recovery_code_by_lookup(
     db: &dyn Database,
-    user_id: &str,
-) -> Result<Vec<RecoveryCodeRow>, DbError> {
+    lookup_id: &str,
+) -> Result<Option<RecoveryCodeRow>, DbError> {
     let query = Query::select()
-        .columns(["id", "user_id", "code_hash", "created_at"])
+        .columns([
+            "id",
+            "lookup_id",
+            "user_id",
+            "code_hash",
+            "created_at",
+            "used_at",
+        ])
         .from(iden("recovery_codes"))
-        .and_where(Expr::col(iden("user_id")).eq(user_id))
-        .and_where(Expr::col(iden("used_at")).is_null())
+        .and_where(Expr::col(iden("lookup_id")).eq(lookup_id))
+        .limit(1)
         .to_owned();
     let rows = db.query(&Statement::render(&query)).await?;
-    Ok(rows
-        .rows
-        .iter()
-        .map(|row| RecoveryCodeRow {
-            id: row.get::<String>("id").unwrap_or_default(),
-            user_id: row.get::<String>("user_id").unwrap_or_default(),
-            code_hash: row.get::<String>("code_hash").unwrap_or_default(),
-            created_at: row.get::<String>("created_at").unwrap_or_default(),
-        })
-        .collect())
+    Ok(rows.first().map(|row| RecoveryCodeRow {
+        id: row.get::<String>("id").unwrap_or_default(),
+        lookup_id: row.get::<String>("lookup_id").unwrap_or_default(),
+        user_id: row.get::<String>("user_id").unwrap_or_default(),
+        code_hash: row.get::<String>("code_hash").unwrap_or_default(),
+        created_at: row.get::<String>("created_at").unwrap_or_default(),
+        used_at: optional::<String>(row, "used_at"),
+    }))
 }
 
 /// Spends one recovery code, if nobody has. Returns the rows changed: of two
@@ -2608,15 +2626,12 @@ pub(crate) async fn spend_recovery_code(
 /// # Errors
 ///
 /// [`DbError::Execute`] when the statement fails.
-pub(crate) async fn delete_recovery_codes(
-    db: &dyn Database,
-    user_id: &str,
-) -> Result<u64, DbError> {
+pub(crate) fn delete_recovery_codes_statement(user_id: &str) -> Statement {
     let mut delete = Query::delete();
     delete
         .from_table(iden("recovery_codes"))
         .and_where(Expr::col(iden("user_id")).eq(user_id));
-    db.execute(&Statement::render(&delete)).await
+    Statement::render(&delete)
 }
 
 /// One `security_notices` row.
@@ -2709,19 +2724,13 @@ pub(crate) async fn mark_security_notice_read(
     db.execute(&Statement::render(&update)).await
 }
 
-/// Records the terms and privacy versions an account accepted.
-///
-/// # Errors
-///
-/// [`DbError::Execute`] when the statement fails.
-pub(crate) async fn insert_terms_acceptance(
-    db: &dyn Database,
+pub(crate) fn insert_terms_acceptance_statement(
     id: &str,
     user_id: &str,
     terms_version: &str,
     privacy_version: &str,
     now: &str,
-) -> Result<(), DbError> {
+) -> Statement {
     let mut insert = Query::insert();
     insert
         .into_table(iden("terms_acceptances"))
@@ -2739,6 +2748,5 @@ pub(crate) async fn insert_terms_acceptance(
             privacy_version.into(),
             now.into(),
         ]);
-    db.execute(&Statement::render(&insert)).await?;
-    Ok(())
+    Statement::render(&insert)
 }

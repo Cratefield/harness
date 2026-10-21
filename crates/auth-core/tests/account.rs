@@ -22,6 +22,9 @@ use tower::ServiceExt;
 
 const EPOCH: i64 = 1_800_000_000;
 const BASE: &str = "/v1/auth-core";
+const ADMIN: &str = "test-admin-token-0123456789abcdef";
+const REDIRECT: &str = "https://undercoverrockstars.com/auth/callback";
+const VERIFIER: &str = "a-verifier-of-at-least-43-characters-1234567890";
 
 fn at(secs: i64) -> FixedClock {
     FixedClock(OffsetDateTime::from_unix_timestamp(secs).expect("epoch in range"))
@@ -48,6 +51,7 @@ fn config() -> Arc<MapConfig> {
             "AUTH_CORE_ISSUER".to_owned(),
             "https://auth.test.example".to_owned(),
         ),
+        ("ADMIN_TOKEN".to_owned(), ADMIN.to_owned()),
         ("AUTH_CORE_TERMS_VERSION".to_owned(), "2026-10".to_owned()),
         ("AUTH_CORE_PRIVACY_VERSION".to_owned(), "2026-10".to_owned()),
     ]))
@@ -181,7 +185,7 @@ fn a_fresh_set_of_ten_codes_is_shown_and_none_is_stored_in_the_clear() {
             assert_eq!(rows.len(), 10);
             for row in &rows.rows {
                 let stored = row.get::<String>("code_hash").expect("hash");
-                assert!(stored.starts_with("$argon2id$"), "argon2id at rest");
+                assert_eq!(stored.len(), 64, "a SHA-256 hex digest at rest");
                 assert!(!codes.iter().any(|c| stored.contains(c.as_str())));
             }
         }
@@ -200,7 +204,7 @@ fn a_recovery_code_signs_in_once_and_refuses_a_second_use() {
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "ada", "recovery_code": code })),
+                Some(json!({ "recovery_code": code })),
             )
             .await;
             assert_eq!(status, StatusCode::OK, "{body}");
@@ -210,7 +214,7 @@ fn a_recovery_code_signs_in_once_and_refuses_a_second_use() {
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "ada", "recovery_code": code })),
+                Some(json!({ "recovery_code": code })),
             )
             .await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "a spent code is refused");
@@ -229,7 +233,7 @@ fn a_wrong_code_and_an_unknown_account_answer_alike() {
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "ada", "recovery_code": "ZZZZ-ZZZZ-ZZZZ-ZZZZ" })),
+                Some(json!({ "recovery_code": "ZZZZ-ZZZZ-ZZZZ-ZZZZ" })),
             )
             .await;
             let (unknown_status, unknown, _) = send(
@@ -237,7 +241,7 @@ fn a_wrong_code_and_an_unknown_account_answer_alike() {
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "nobody", "recovery_code": "ZZZZ-ZZZZ-ZZZZ-ZZZZ" })),
+                Some(json!({ "recovery_code": "ZZZZ-ZZZZ-ZZZZ-ZZZZ" })),
             )
             .await;
             assert_eq!(wrong_status, unknown_status);
@@ -264,7 +268,7 @@ fn regenerating_needs_a_fresh_ceremony_and_retires_the_old_set() {
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "ada", "recovery_code": old[0] })),
+                Some(json!({ "recovery_code": old[0] })),
             )
             .await;
             assert_eq!(
@@ -288,7 +292,7 @@ fn a_recovery_sign_in_records_a_notice_the_account_reads_and_no_one_else_does() 
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "ada", "recovery_code": codes[1] })),
+                Some(json!({ "recovery_code": codes[1] })),
             )
             .await;
             assert_eq!(status, StatusCode::OK);
@@ -357,7 +361,7 @@ fn an_account_with_no_address_never_needs_one_for_any_of_this() {
                 Method::POST,
                 "/recovery/redeem",
                 None,
-                Some(json!({ "sub": "ada", "recovery_code": codes[2] })),
+                Some(json!({ "recovery_code": codes[2] })),
             )
             .await;
             assert_eq!(status, StatusCode::OK, "recovery needs no address");
@@ -383,7 +387,7 @@ async fn the_anonymous_recovery_route_is_rate_limited() {
         Method::POST,
         "/recovery/redeem",
         None,
-        Some(json!({ "sub": "ada", "recovery_code": "AAAA-AAAA-AAAA-AAAA" })),
+        Some(json!({ "recovery_code": "AAAA-AAAA-AAAA-AAAA" })),
     )
     .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
@@ -405,7 +409,7 @@ async fn a_recovery_attempt_without_a_captcha_pass_is_refused_and_spends_nothing
         Method::POST,
         "/recovery/redeem",
         None,
-        Some(json!({ "sub": "ada", "recovery_code": codes[3], "captchaToken": "bad-token" })),
+        Some(json!({ "recovery_code": codes[3], "captchaToken": "bad-token" })),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -414,7 +418,7 @@ async fn a_recovery_attempt_without_a_captcha_pass_is_refused_and_spends_nothing
         Method::POST,
         "/recovery/redeem",
         None,
-        Some(json!({ "sub": "ada", "recovery_code": codes[3], "captchaToken": "good-token" })),
+        Some(json!({ "recovery_code": codes[3], "captchaToken": "good-token" })),
     )
     .await;
     assert_eq!(
@@ -422,4 +426,250 @@ async fn a_recovery_attempt_without_a_captcha_pass_is_refused_and_spends_nothing
         StatusCode::OK,
         "the code was not spent by the refused attempt"
     );
+}
+
+/// A public OAuth client, registered through the admin API.
+async fn client_id(kit: &TestHarness) -> String {
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(format!("{BASE}/admin/clients"))
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    let body = json!({ "name": "Undercover", "kind": "public", "redirect_uris": [REDIRECT] });
+    let response = kit
+        .router
+        .clone()
+        .oneshot(
+            request
+                .body(axum::body::Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("answers");
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    let json: Value = serde_json::from_slice(&bytes).expect("json");
+    json["id"].as_str().expect("id").to_owned()
+}
+
+/// `/authorize` as a relying party asks for it, with a session cookie.
+async fn authorize_as(
+    kit: &TestHarness,
+    client: &str,
+    cookie: &str,
+    extra: &str,
+) -> (StatusCode, axum::http::HeaderMap) {
+    use cratefield_core::Clock as _;
+    let _ = at(EPOCH).now();
+    let challenge = {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+        use sha2::{Digest, Sha256};
+        Base64UrlUnpadded::encode_string(&Sha256::digest(VERIFIER.as_bytes()))
+    };
+    let uri = format!(
+        "{BASE}/authorize?response_type=code&client_id={client}&redirect_uri={REDIRECT}\
+         &code_challenge={challenge}&code_challenge_method=S256&state=xyz{extra}"
+    );
+    let request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::COOKIE, format!("__Host-session={cookie}"));
+    let response = kit
+        .router
+        .clone()
+        .oneshot(request.body(axum::body::Body::empty()).expect("request"))
+        .await
+        .expect("answers");
+    (response.status(), response.headers().clone())
+}
+
+fn is_code(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(header::LOCATION)
+        .is_some_and(|value| value.to_str().is_ok_and(|v| v.contains("code=")))
+}
+
+/// Issue #914 (security review): a recovery sign-in is not a session a
+/// relying party may use. It cannot obtain a code, and it does not meet a
+/// step-up.
+#[test]
+fn a_recovery_sign_in_is_signed_out_for_the_authorization_endpoint() {
+    pollster::block_on(async {
+        for kit in kits() {
+            seed(&kit, "ada").await;
+            let client = client_id(&kit).await;
+            let codes = fresh_codes(&kit, "ada").await;
+            let (status, _, cookie) = send(
+                &kit,
+                Method::POST,
+                "/recovery/redeem",
+                None,
+                Some(json!({ "recovery_code": codes[4] })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let cookie = cookie
+                .expect("a session")
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim_start_matches("__Host-session=")
+                .to_owned();
+            let (status, headers) = authorize_as(&kit, &client, &cookie, "&scope=openid").await;
+            assert_eq!(status, StatusCode::OK, "the chooser, not a code");
+            assert!(!is_code(&headers));
+            let (status, headers) = authorize_as(&kit, &client, &cookie, "&prompt=none").await;
+            assert_eq!(status, StatusCode::FOUND);
+            assert!(
+                headers
+                    .get(header::LOCATION)
+                    .is_some_and(|l| l.to_str().unwrap_or_default().contains("login_required"))
+            );
+        }
+    });
+}
+
+/// Issue #914 (security review): redeeming a code signs the account's other
+/// sessions out by default, and keeps them when the caller says not to.
+#[test]
+fn a_recovery_redeem_signs_the_other_sessions_out_by_default() {
+    pollster::block_on(async {
+        for kit in kits() {
+            seed(&kit, "ada").await;
+            let client = client_id(&kit).await;
+            let codes = fresh_codes(&kit, "ada").await;
+            let old = {
+                use cratefield_auth_core::{Login, issue};
+                issue(
+                    &*kit.db,
+                    &at(EPOCH),
+                    &UlidIdGen,
+                    Login {
+                        user_id: "ada",
+                        ip: None,
+                        user_agent: None,
+                        presented_cookie: None,
+                        presented_session_id: None,
+                        amr: &["passkey", "user"],
+                    },
+                )
+                .await
+                .expect("session")
+                .value
+            };
+            let (status, _, _) = send(
+                &kit,
+                Method::POST,
+                "/recovery/redeem",
+                None,
+                Some(json!({ "recovery_code": codes[5] })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let (status, headers) = authorize_as(&kit, &client, &old, "&scope=openid").await;
+            assert_eq!(status, StatusCode::OK, "the old session was signed out");
+            assert!(!is_code(&headers));
+
+            // Asked not to sign the others out, the old session keeps working.
+            let kept = {
+                use cratefield_auth_core::{Login, issue};
+                issue(
+                    &*kit.db,
+                    &at(EPOCH),
+                    &UlidIdGen,
+                    Login {
+                        user_id: "ada",
+                        ip: None,
+                        user_agent: None,
+                        presented_cookie: None,
+                        presented_session_id: None,
+                        amr: &["passkey", "user"],
+                    },
+                )
+                .await
+                .expect("session")
+                .value
+            };
+            let (status, _, _) = send(
+                &kit,
+                Method::POST,
+                "/recovery/redeem",
+                None,
+                Some(json!({ "recovery_code": codes[6], "sign_out_other_sessions": false })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let (_, headers) = authorize_as(&kit, &client, &kept, "&scope=openid").await;
+            assert!(is_code(&headers), "asked not to, the other session is kept");
+        }
+    });
+}
+
+/// Issue #914 (security review): with no captcha port, recovery refuses.
+#[pollster::test]
+async fn recovery_refuses_without_a_captcha_port() {
+    let kit = TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
+        ports.config = config();
+        ports.captcha = None;
+    });
+    seed(&kit, "ada").await;
+    let codes = fresh_codes(&kit, "ada").await;
+    let (status, _, _) = send(
+        &kit,
+        Method::POST,
+        "/recovery/redeem",
+        None,
+        Some(json!({ "recovery_code": codes[7] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Issue #914 (security review): a wrong code for a real account and a code
+/// for no account take the same work: one lookup, one hash. Their medians over
+/// repeated runs are close, so timing does not show whether an account exists.
+#[pollster::test]
+async fn an_unknown_code_costs_what_a_wrong_one_costs() {
+    let kit = TestHarness::with_ports(vec![Box::new(AuthCore::new())], |ports| {
+        ports.config = config();
+    });
+    seed(&kit, "ada").await;
+    let _ = fresh_codes(&kit, "ada").await;
+    let median = |mut values: Vec<std::time::Duration>| {
+        values.sort();
+        values[values.len() / 2]
+    };
+    let mut wrong_real = Vec::new();
+    let mut unknown = Vec::new();
+    for _ in 0..25 {
+        let t = std::time::Instant::now();
+        let (status, _, _) = send(
+            &kit,
+            Method::POST,
+            "/recovery/redeem",
+            None,
+            Some(json!({ "recovery_code": "ABCD-EFGH-IJKL-MNPQ-RSTU-VWXY" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        wrong_real.push(t.elapsed());
+        let t = std::time::Instant::now();
+        let (status, _, _) = send(
+            &kit,
+            Method::POST,
+            "/recovery/redeem",
+            None,
+            Some(json!({ "recovery_code": "ZZZZZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        unknown.push(t.elapsed());
+    }
+    let (a, b) = (
+        median(wrong_real).as_secs_f64(),
+        median(unknown).as_secs_f64(),
+    );
+    let ratio = if a > b { a / b } else { b / a };
+    assert!(ratio < 5.0, "medians {a}s and {b}s differ by {ratio}x");
 }

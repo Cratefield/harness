@@ -136,3 +136,28 @@ fn a_sign_up_without_a_captcha_pass_is_refused() {
         assert_eq!(res.status, StatusCode::FORBIDDEN, "{}", res.text());
     });
 }
+
+/// Issue #914 (security review): a sign-up that fails part way leaves nothing.
+/// The same authenticator signing up twice makes one account, not two: the second
+/// is refused on its passkey, and the batch leaves no user row behind.
+#[test]
+fn a_refused_sign_up_leaves_no_account_behind() {
+    pollster::block_on(async {
+        let kit = support::kit();
+        let authenticator =
+            SoftAuthenticator::new(Algorithm::Es256).with_credential_id(b"same-key");
+        let (_, body) = signup_body(&kit, &authenticator, terms(true, "2026-10")).await;
+        assert_eq!(
+            post(&kit, VERIFY, &body, None).await.status,
+            StatusCode::CREATED
+        );
+        let (_, body) = signup_body(&kit, &authenticator, terms(true, "2026-10")).await;
+        let second = post(&kit, VERIFY, &body, None).await;
+        assert_ne!(second.status, StatusCode::CREATED, "{}", second.text());
+        assert_eq!(
+            support::count(&kit, "users"),
+            1,
+            "no second account was left behind"
+        );
+    });
+}

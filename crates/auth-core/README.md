@@ -48,12 +48,16 @@ are recorded with the account. The answer is `201` with the account's `sub`,
 `recovery_codes` (ten, shown once) and a session cookie. Both steps are
 rate-limited per caller address and pass the captcha when one is configured.
 
-**Recovery codes.** Only Argon2id hashes are stored. A code is spent once. A
-regeneration (`POST /recovery/codes`) needs a passkey or email ceremony in the
-last two minutes and replaces the whole set. `POST /recovery/redeem` with
-`{"sub", "recovery_code"}` signs the account in with the `recovery` method: that
-session can enrol a passkey and nothing else, and the redeem starts the 24-hour
-quiet period. A wrong code and an unknown account get the same answer.
+**Recovery codes.** Ten per set, shown once. A code is `LOOKUP-LOOKUP-SECRET-SECRET-SECRET-SECRET`: the first eight symbols are a public lookup that finds one row, the last sixteen are an 80-bit secret stored only as its SHA-256. A code is spent once. Regenerating (`POST /recovery/codes`) needs a passkey or email ceremony in the last two minutes and replaces the whole set. `POST /recovery/redeem` with `{"recovery_code"}` (no account id: the code names its account) signs the account in:
+
+- the session carries the `recovery` method. Its only use is enrolling a passkey (`/authorize` treats such a session as signed out, so a relying party never gets a code from it, and it cannot meet a step-up);
+- the redeem starts the 24-hour quiet period;
+- by default it signs the account's other sessions out (`sign_out_other_sessions`, default `true`; pass `false` to keep them);
+- a wrong, spent, unknown or foreign code, and a missing captcha, get one answer. A redeem does one lookup and one hash whatever the code names, so timing does not show whether a code or account exists.
+
+Sign-up and recovery both require the captcha: with no captcha port they refuse every request, and boot logs an error when terms are configured without one.
+
+**Atomic sign-up.** The account, its passkey, the accepted terms and the recovery codes are written in one database batch: either all of them exist afterwards, or none does (a second sign-up with the same authenticator fails on its passkey and leaves nothing). The session is issued after that batch.
 
 **Notices.** Every passkey added or removed, recovery code used and set
 replaced is recorded in the app: `GET /v1/auth-core/notices` lists them for the
