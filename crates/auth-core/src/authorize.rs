@@ -981,7 +981,7 @@ pub async fn session_proves_by_passkey_or_email(db: &dyn Database, session_id: &
 ///
 /// # Errors
 ///
-/// [`DbError`] when the write fails.
+/// [`cratefield_core::DbError`] when the write fails.
 ///
 /// # Panics
 ///
