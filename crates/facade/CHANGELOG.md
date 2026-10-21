@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6](https://github.com/Cratefield/harness/compare/cratefield-v0.2.5...cratefield-v0.2.6) - 2026-10-21
+
+### Other
+
+- updated the following local packages: cratefield-mail-templates, cratefield-module-email-signup, cratefield-module-privacy, cratefield-module-waitlist, cratefield-module-notifications, cratefield-module-orgs, cratefield-module-telegram
+
 ## [0.2.5](https://github.com/Cratefield/harness/compare/cratefield-v0.2.4...cratefield-v0.2.5) - 2026-10-21
 
 ### Other

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/Cratefield/harness/compare/cratefield-module-privacy-v0.3.3...cratefield-module-privacy-v0.3.4) - 2026-10-21
+
+### Other
+
+- module-privacy test: out-of-window timestamps 60 s past the tolerance ([#922](https://github.com/Cratefield/harness/pull/922))
+
 ## [0.3.3](https://github.com/Cratefield/harness/compare/cratefield-module-privacy-v0.3.2...cratefield-module-privacy-v0.3.3) - 2026-10-19
 
 ### Other
