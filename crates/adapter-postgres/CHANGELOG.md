@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/Cratefield/harness/compare/cratefield-adapter-postgres-v0.3.4...cratefield-adapter-postgres-v0.3.5) - 2026-10-21
+
+### Other
+
+- Red-Team Hunt: Error Handling & Edge Cases - Bug Fixes ([#906](https://github.com/Cratefield/harness/pull/906))
+
 ## [0.3.4](https://github.com/Cratefield/harness/compare/cratefield-adapter-postgres-v0.3.3...cratefield-adapter-postgres-v0.3.4) - 2026-10-21
 
 ### Other

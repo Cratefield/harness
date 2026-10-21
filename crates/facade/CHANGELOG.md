@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/Cratefield/harness/compare/cratefield-v0.2.4...cratefield-v0.2.5) - 2026-10-21
+
+### Other
+
+- updated the following local packages: cratefield-adapter-sqlite, cratefield-adapter-postgres, cratefield-module-email-signup, cratefield-testing, cratefield-auth-client, cratefield-runtime-native, cratefield-oauth-client, cratefield-runtime-cloudflare, cratefield-module-notifications, cratefield-module-connections, cratefield-module-guardrails, cratefield-module-owlpost, cratefield-module-telegram
+
 ## [0.2.4](https://github.com/Cratefield/harness/compare/cratefield-v0.2.3...cratefield-v0.2.4) - 2026-10-21
 
 ### Other
