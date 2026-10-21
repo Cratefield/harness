@@ -35,7 +35,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 
 | Crate | Version | HARNESS_API | `cratefield-core` range |
 |---|---|---|---|
-| `cratefield` | 0.2.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield` | 0.2.6 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-access` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-accounts` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-adapter-anthropic` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
@@ -82,23 +82,23 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-import-supabase` | 0.2.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-introspect` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-mail-previews` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-mail-templates` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-mail-templates` | 0.1.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-changelog` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-cms` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-connections` | 0.2.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-crm` | 0.1.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-device-auth` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-email-signup` | 0.4.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-email-signup` | 0.4.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-guardrails` | 0.1.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-notifications` | 0.3.6 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-orgs` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-notifications` | 0.3.7 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-orgs` | 0.1.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-owlpost` | 0.1.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-privacy` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-privacy` | 0.3.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-sealed` | 0.1.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-telegram` | 0.1.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-telegram` | 0.1.6 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-telemetry` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-waitlist` | 0.4.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-waitlist` | 0.4.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-wallets` | 0.1.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-webhooks` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-oauth-client` | 0.3.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |

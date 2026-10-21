@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4](https://github.com/Cratefield/harness/compare/cratefield-module-email-signup-v0.4.3...cratefield-module-email-signup-v0.4.4) - 2026-10-21
+
+### Other
+
+- mark the fallback link so a light accent stays readable ([#920](https://github.com/Cratefield/harness/pull/920))
+
 ## [0.4.3](https://github.com/Cratefield/harness/compare/cratefield-module-email-signup-v0.4.2...cratefield-module-email-signup-v0.4.3) - 2026-10-21
 
 ### Other
