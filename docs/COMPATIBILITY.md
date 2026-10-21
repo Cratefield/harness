@@ -35,7 +35,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 
 | Crate | Version | HARNESS_API | `cratefield-core` range |
 |---|---|---|---|
-| `cratefield` | 0.2.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield` | 0.2.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-access` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-accounts` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-adapter-anthropic` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
@@ -63,7 +63,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-adapter-webhook-tracker` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-adapter-webpush` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-adapter-workers-ai` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-auth-client` | 0.3.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-auth-client` | 0.4.0 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-auth-core` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-auth-magic-link` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-auth-meta` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
@@ -73,7 +73,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-auth-worker` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-bench-write-ceiling` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-chrome` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-cli` | 0.7.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-cli` | 0.7.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-client-ts` | 0.4.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-connections` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-console` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
@@ -91,12 +91,12 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-email-signup` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-guardrails` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-hello` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-notifications` | 0.3.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-notifications` | 0.3.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-orgs` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-owlpost` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-privacy` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-sealed` | 0.1.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-telegram` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-telegram` | 0.1.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-telemetry` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-waitlist` | 0.4.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-wallets` | 0.1.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
@@ -107,8 +107,8 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-push-wiring` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-runtime-browser` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-runtime-browser-demo` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-runtime-cloudflare` | 0.5.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-runtime-native` | 0.4.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-runtime-cloudflare` | 0.5.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-runtime-native` | 0.4.6 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-secrets` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-session-grants` *(not published)* | 0.1.0 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-tables` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
