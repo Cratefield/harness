@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Postgres TLS uses the OS trust store (`sqlx` `tls-rustls-ring-native-roots`) instead of the bundled webpki-roots 0.26 set, which has no patched release (RUSTSEC-2026-0381).
+
 ## [0.5.3](https://github.com/Cratefield/harness/compare/cratefield-testing-v0.5.2...cratefield-testing-v0.5.3) - 2026-10-19
 
 ### Other
