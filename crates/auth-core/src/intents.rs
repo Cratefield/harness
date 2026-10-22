@@ -162,13 +162,21 @@ pub fn decode_list(json: &str) -> Option<Vec<SignupIntent>> {
     serde_json::from_str(json).ok()
 }
 
-/// Reads the `intents=` parameter of `/authorize`: comma-separated keys,
-/// blanks dropped, duplicates removed, order kept. Whether the keys are
-/// allowed is [`check_selection`]'s question, since it needs the client.
+/// Reads the `intents=` parameter of `/authorize`: comma-separated keys.
+///
+/// At most [`MAX_INTENTS`] raw entries are read, before anything else, so a
+/// long value costs bounded work. Blanks and entries that are not key-shaped
+/// are dropped, then duplicates are removed and the order kept. Whether the
+/// keys are on a client's list is [`check_selection`]'s question.
 #[must_use]
 pub fn parse_param(raw: &str) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
-    for key in raw.split(',').map(str::trim).filter(|key| !key.is_empty()) {
+    for key in raw
+        .split(',')
+        .take(MAX_INTENTS)
+        .map(str::trim)
+        .filter(|key| valid_key(key))
+    {
         if !keys.iter().any(|known| known == key) {
             keys.push(key.to_owned());
         }
@@ -256,6 +264,29 @@ pub async fn chosen(
     Ok(store::user_client_intents_json(db, user_id, client_id)
         .await?
         .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok()))
+}
+
+/// Records the keys an account chose for one client, unless it already has an
+/// answer for that client: an existing answer is never overwritten here. The
+/// person changes it by being asked again (`prompt=intents`), which goes through
+/// [`record`]. Returns whether a row was written. The caller has checked the
+/// keys against the client's list with [`check_selection`].
+///
+/// # Errors
+///
+/// [`DbError`] when a statement fails.
+pub async fn record_if_unset(
+    db: &dyn Database,
+    clock: &dyn Clock,
+    user_id: &str,
+    client_id: &str,
+    keys: &[String],
+) -> Result<bool, DbError> {
+    if chosen(db, user_id, client_id).await?.is_some() {
+        return Ok(false);
+    }
+    record(db, clock, user_id, client_id, keys).await?;
+    Ok(true)
 }
 
 /// Records the keys an account chose for one client. The caller has checked
@@ -417,6 +448,20 @@ mod tests {
         assert_eq!(
             parse_param(" builder, buyer ,builder,,"),
             vec!["builder".to_owned(), "buyer".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_param_reads_at_most_the_cap_and_only_key_shaped_entries() {
+        let long: Vec<String> = (0..200).map(|i| format!("k{i}")).collect();
+        let parsed = parse_param(&long.join(","));
+        assert_eq!(parsed.len(), MAX_INTENTS);
+        assert_eq!(parsed[0], "k0");
+        // Entries past the cap are not read, even when they would be new keys.
+        let mixed = format!("Bad Key,builder,{},late", "x,".repeat(MAX_INTENTS));
+        assert_eq!(
+            parse_param(&mixed),
+            vec!["builder".to_owned(), "x".to_owned()]
         );
     }
 

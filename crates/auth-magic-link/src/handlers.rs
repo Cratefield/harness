@@ -800,6 +800,9 @@ async fn issue_link(
     }
     if user_id.is_none() {
         payload.insert("new_email".to_owned(), json!(email));
+        // The account is made when the link is opened, so the language its
+        // mail was written in travels with the link (the account's locale).
+        payload.insert("locale".to_owned(), json!(locale));
     }
     if let Some(client) = &link.client_id {
         payload.insert("client_id".to_owned(), json!(client));
@@ -1053,6 +1056,13 @@ async fn confirm(
     }
 }
 
+/// Whether a link's expiry (RFC 3339) has passed at `now`. A value that does not
+/// parse counts as expired: the link is refused rather than honoured.
+fn expired_at(expires_at: &str, now: time::OffsetDateTime) -> bool {
+    time::OffsetDateTime::parse(expires_at, &time::format_description::well_known::Rfc3339)
+        .map_or(true, |at| at <= now)
+}
+
 /// What the sign-up question decides for an opened link.
 enum Question {
     /// Go on, recording these keys for the account when there are any.
@@ -1091,16 +1101,15 @@ async fn sign_up_question(
         });
     }
     // An application's own answer, given on /authorize, is recorded for the
-    // account it signs in.
-    let keys: Vec<String> = payload
-        .get("intents")
-        .and_then(Value::as_array)
-        .map(|keys| {
-            keys.iter()
-                .filter_map(|key| key.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
+    // account it signs in. A link with no answer in it records nothing, so an
+    // ordinary sign-in never wipes what the person chose before.
+    let Some(raw) = payload.get("intents").and_then(Value::as_array) else {
+        return Ok(Question::Go(None));
+    };
+    let keys: Vec<String> = raw
+        .iter()
+        .filter_map(|key| key.as_str().map(str::to_owned))
+        .collect();
     Ok(Question::Go(
         cratefield_auth_core::intents::check_selection(&list, &keys).ok(),
     ))
@@ -1149,12 +1158,23 @@ async fn spend(
         .as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| json!({}));
+    // A spent or expired link asks nothing and makes nothing (the question is
+    // only ever shown for a link that could still be spent).
+    if row.consumed_at.is_some() || expired_at(&row.expires_at, clock.now()) {
+        return Ok(expired_page(brand));
+    }
     let client_id = payload_str(&payload, "client_id");
     let pending_email = if row.user_id.is_none() {
         payload_str(&payload, "new_email")
     } else {
         None
     };
+    // A link for an account not made yet is honoured only while this
+    // deployment registers by link. Checked again here, not only at request
+    // time, so a registration switched off after the mail went out holds.
+    if pending_email.is_some() && !settings.allow_registration {
+        return Ok(expired_page(brand));
+    }
     let chosen = match sign_up_question(
         db,
         scope,
@@ -1181,19 +1201,43 @@ async fn spend(
         let Some(email) = pending_email.as_deref() else {
             return Ok(expired_page(brand));
         };
-        // Somebody may have made the account in the meantime; the link then
-        // answers as expired, as a used link does.
-        match user_by_primary_email(db, email).await {
-            Ok(None) => {}
-            _ => return Ok(expired_page(brand)),
-        }
-        match create_account(db, clock, id_gen, email, None).await {
-            Ok(id) => id,
+        // One statement that inserts only when no account holds the address.
+        // A second link for the same address that gets here answers as
+        // expired, as a used link does.
+        let id = id_gen.ulid();
+        let created = cratefield_auth_core::insert_user_if_email_free(
+            db,
+            &UserRow {
+                id: id.clone(),
+                display_name: None,
+                primary_email: Some(email.to_owned()),
+                // Unverified until this link's own proof below. Creating the
+                // row is not proof; opening the mail is.
+                primary_email_verified: false,
+                locale: payload_str(&payload, "locale"),
+                status: STATUS_ACTIVE.to_owned(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+        )
+        .await;
+        match created {
+            Ok(true) => {}
+            Ok(false) => return Ok(expired_page(brand)),
             Err(err) => {
                 tracing::error!(error = %err, "could not create an account for a magic link");
                 return Err(Problem::internal().instance(&scope.request_id));
             }
         }
+        // Every other unspent link for this address is now dead: the account
+        // exists, and each of them would otherwise make a second sign-in path.
+        if let Err(err) =
+            cratefield_auth_core::retire_pending_links_for_email(db, TOKEN_MAGIC_LINK, email, &now)
+                .await
+        {
+            tracing::warn!(error = %err, "could not retire the other links for an address");
+        }
+        id
     };
     let Ok(Some(user)) = user_by_id(db, &user_id).await else {
         return Ok(expired_page(brand));

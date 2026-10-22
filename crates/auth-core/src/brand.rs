@@ -255,7 +255,7 @@ impl Brand {
             .and_then(|value| check_accent(&value).ok())
             .unwrap_or_else(|| DEFAULT_ACCENT.to_owned());
         Self {
-            logo_url: get(cfg, LOGO_URL_KEY).filter(|value| check_url(value).is_ok()),
+            logo_url: get(cfg, LOGO_URL_KEY).filter(|value| check_logo_url(value).is_ok()),
             theme: PageTheme::from_config(cfg, &accent),
             accent,
             support_email: get(cfg, SUPPORT_EMAIL_KEY).filter(|value| check_email(value).is_ok()),
@@ -319,7 +319,7 @@ impl Brand {
         let checks: [(&str, Check); 17] = [
             (NAME_KEY, check_text),
             (FOOTER_KEY, check_text),
-            (LOGO_URL_KEY, check_url),
+            (LOGO_URL_KEY, check_logo_url),
             (ACCENT_KEY, check_accent),
             (SUPPORT_EMAIL_KEY, check_email),
             (PRIVACY_URL_KEY, check_url),
@@ -372,6 +372,26 @@ fn check_text(value: &str) -> Result<String, String> {
 }
 
 /// An absolute `https` URL (`http` only on loopback, for local work).
+/// `AUTH_BRAND_LOGO_URL`: an absolute `https` URL whose path names an image
+/// type. The page loads it with `img-src`, so the origin is the only one the
+/// policy opens; a page or a script under that origin is refused here.
+const IMAGE_TYPES: [&str; 6] = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
+
+fn check_logo_url(value: &str) -> Result<String, String> {
+    let checked = check_url(value)?;
+    let path = url::Url::parse(value)
+        .map(|url| url.path().to_ascii_lowercase())
+        .map_err(|err| format!("{value:?} is not an absolute URL: {err}"))?;
+    if IMAGE_TYPES.iter().any(|ext| path.ends_with(ext)) {
+        Ok(checked)
+    } else {
+        Err(format!(
+            "{value:?} must name an image ({})",
+            IMAGE_TYPES.join(", ")
+        ))
+    }
+}
+
 fn check_url(value: &str) -> Result<String, String> {
     let url =
         url::Url::parse(value).map_err(|err| format!("{value:?} is not an absolute URL: {err}"))?;
@@ -652,6 +672,36 @@ mod tests {
         assert_eq!(brand.theme.background, DEFAULT_BACKGROUND);
         assert_eq!(brand.theme.radius, DEFAULT_RADIUS);
         assert_eq!(brand.theme.font_css_url, None);
+    }
+
+    #[test]
+    fn a_logo_must_be_an_https_image_and_nothing_else() {
+        for refused in [
+            "https://factory0.ventures/index.html",
+            "https://factory0.ventures/app.js",
+            "http://factory0.ventures/assets/icon-512.png",
+            "https://factory0.ventures/",
+        ] {
+            let cfg = MapConfig::from_pairs([(LOGO_URL_KEY, refused)]);
+            assert!(
+                Brand::problems(&cfg)
+                    .iter()
+                    .any(|p| p.contains(LOGO_URL_KEY)),
+                "{refused} accepted as a logo"
+            );
+            assert_eq!(Brand::from_config(&cfg, &venture()).logo_url, None);
+        }
+        for accepted in [
+            "https://factory0.ventures/assets/icon-512.png",
+            "https://cdn.example/logo.SVG",
+        ] {
+            let cfg = MapConfig::from_pairs([(LOGO_URL_KEY, accepted)]);
+            assert!(Brand::problems(&cfg).is_empty(), "{accepted} refused");
+            assert_eq!(
+                Brand::from_config(&cfg, &venture()).logo_url.as_deref(),
+                Some(accepted)
+            );
+        }
     }
 
     #[test]

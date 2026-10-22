@@ -1442,6 +1442,7 @@ dependencies = [
  "pollster",
  "sea-query",
  "serde_json",
+ "sha2 0.11.0",
  "toml 0.8.23",
  "tower",
  "url",

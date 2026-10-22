@@ -108,7 +108,11 @@ of interest, a kind of user). They are not roles.
   `user_client_intents`. A client without a list is never asked.
 - The application can answer itself with `intents=k1,k2` on `/authorize`. Each
   key must be on the client's list, or the request is refused with
-  `invalid_request` to the registered URI. The step is then skipped.
+  `invalid_request` to the registered URI. The step is then skipped. Only the
+  first 12 comma-separated entries are read, and entries that are not
+  key-shaped are dropped. The answer is recorded only when the account has no
+  answer for that client yet: an application never silently replaces what the
+  person chose (`prompt=intents` is the way to change it).
 - A signed-in person can be asked again with `prompt=intents`. The hosted step
   posts to `POST /intents`, which records the answer and returns to the request
   without the `intents` prompt.

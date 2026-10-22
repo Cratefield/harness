@@ -221,6 +221,10 @@ struct LoginChooserTemplate {
     return_to: String,
     /// The same request without `login_hint`, for "Use a different address".
     return_to_without_hint: String,
+    /// The Turnstile widget for the email form, when the instance has a captcha.
+    turnstile_widget: Option<String>,
+    /// The Turnstile loader script, with the widget.
+    turnstile_script: Option<&'static str>,
 }
 
 #[derive(Template)]
@@ -1477,8 +1481,21 @@ async fn authorize(
             .into_iter()
             .filter(|method| !method.is_passkey && method.slug != "magic-link")
             .collect();
+        // The email step is a form, so when the instance has a captcha it
+        // carries the Turnstile widget, the same as the magic link's own form.
+        // Without the widget the form would post with no answer and be
+        // refused silently.
+        let brand = brand_of(&state);
+        let turnstile = crate::page::turnstile_site_key(state.ctx.as_ref())
+            .filter(|_| has_email)
+            .map(|key| crate::page::turnstile_widget(&key, "magic-link", brand.theme.scheme));
+        let csp = crate::page::chooser_turnstile_csp(
+            brand.theme.font_css_url.as_deref(),
+            brand.logo_url.as_deref(),
+        );
+        let has_widget = turnstile.is_some();
         let mut response = html(&LoginChooserTemplate {
-            brand: brand_of(&state),
+            brand,
             has_passkey,
             has_email,
             registration_open: magic_link_registration_open(&*state.ctx.config),
@@ -1486,7 +1503,14 @@ async fn authorize(
             methods,
             return_to,
             return_to_without_hint,
+            turnstile_script: turnstile
+                .is_some()
+                .then_some(cratefield_ui::render::TURNSTILE_SCRIPT),
+            turnstile_widget: turnstile,
         });
+        if has_widget {
+            crate::page::with_csp(&mut response, &csp);
+        }
         if let Some(cookie) = cookie
             && let Ok(value) = HeaderValue::from_str(&browser_cookie_header(cookie))
         {
@@ -1626,8 +1650,11 @@ async fn authorize(
     // The application's own answer (`intents=`) is recorded for this account
     // and client. It is the application's to make, and it grants nothing: the
     // `roles` claim is read from the account's role, never from here.
+    // Only when the account has no answer for this client yet: the
+    // application's `intents=` never silently replaces what the person chose
+    // (`prompt=intents` is how they change it).
     if let Some(chosen) = &requested_intents {
-        intents::record(&*db, &*clock, &session.user_id, &query.client_id, chosen)
+        intents::record_if_unset(&*db, &*clock, &session.user_id, &query.client_id, chosen)
             .await
             .map_err(|_| Problem::internal())?;
     }
@@ -1779,15 +1806,28 @@ fn to_authorize(uri: &Uri) -> Response {
 
 /// Whether a `return_to` names this module's `/authorize`: a path on this
 /// service, never an absolute or protocol-relative URL.
+///
+/// The same rules `magic-link`'s `safe_return_to` applies to its own
+/// `return_to`: trimmed, a bounded length, a path on this service, and no
+/// control characters. The caller redirects to the trimmed value.
 fn is_authorize_path(candidate: &str) -> bool {
-    candidate.starts_with('/')
-        && !candidate.starts_with("//")
-        && !candidate.starts_with("/\\")
-        && candidate
+    // Control characters are refused in the value as sent, before any trim: a
+    // trailing newline must not be quietly cut and the rest accepted.
+    let value = candidate.trim();
+    candidate.len() <= MAX_RETURN_TO
+        && !candidate.chars().any(char::is_control)
+        && value.starts_with('/')
+        && !value.starts_with("//")
+        && !value.starts_with("/\\")
+        && value
             .split('?')
             .next()
             .is_some_and(|path| path.ends_with("/authorize"))
 }
+
+/// The longest `return_to` the flow carries, the same bound the magic link
+/// applies.
+const MAX_RETURN_TO: usize = 4096;
 
 #[derive(Deserialize)]
 struct LogoutQuery {
@@ -2013,7 +2053,10 @@ async fn intents_submit(
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.clone())
     };
-    let Some(return_to) = field("return_to").filter(|value| is_authorize_path(value)) else {
+    let Some(return_to) = field("return_to")
+        .filter(|value| is_authorize_path(value))
+        .map(|value| value.trim().to_owned())
+    else {
         return Ok(error_page(&scope, brand));
     };
     let query_part = return_to.split_once('?').map_or("", |(_, query)| query);
@@ -2115,6 +2158,8 @@ mod tests {
             hint: None,
             return_to: hostile.to_owned(),
             return_to_without_hint: hostile.to_owned(),
+            turnstile_widget: None,
+            turnstile_script: None,
         }
         .render()
         .expect("renders");

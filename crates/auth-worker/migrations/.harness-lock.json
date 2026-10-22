@@ -86,5 +86,9 @@
   "auth-passkeys/0002": {
     "file": "0014_auth-passkeys_0002_passkey_prf.sql",
     "sha256": "115d7581ca378208aba9ac0627e893a550069a6d40cf76a33794afde865269f9"
+  },
+  "auth-passkeys/0003": {
+    "file": "0022_auth-passkeys_0003_offer_dismissals.sql",
+    "sha256": "9b217fd9160798c57b7f998a0cea7caea6111ef42db3e7869edb0065b38d25bd"
   }
 }

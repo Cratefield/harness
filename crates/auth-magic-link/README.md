@@ -242,8 +242,13 @@ for the person itself (`intents=` on `/authorize`) gets its account at request
 time, as before, and the answer is recorded when the link is opened. A
 deployment whose client asks nothing is unchanged.
 
-The link's payload names the client and carries the new address until the
-account exists. A pending link with no account is outside any person's
+The account is inserted only if no account holds the address, in one
+statement, so two links for one address cannot both make it. When one link
+makes the account, the other unspent links for that address are spent with
+it. A link is refused as expired before the question is shown, and a link for
+a new account is refused once registration is switched off, even if it was
+sent while it was on. The link's payload names the client, the language the
+mail was written in, and the new address until the account exists. A pending link with no account is outside any person's
 export or erasure until it expires (fifteen minutes by default); it names no
 user, and it is spent or retired by the same single-use rules as any other
 link.

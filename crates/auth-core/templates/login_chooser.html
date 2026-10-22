@@ -3,6 +3,8 @@
 <head>
 {% include "_head.html" %}
 <title>Continue · {{ brand.name }}</title>
+{% if let Some(script) = turnstile_script %}<script src="{{ script }}" async defer></script>
+{% endif %}
 </head>
 <body>
 <div class="cf-toasts" id="cf-toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
@@ -24,6 +26,8 @@
     {% endif %}
     {% if has_passkey %}
     <button class="cf-primary" type="button" id="cf-passkey" data-method="passkey" data-return-to="{{ return_to }}" hidden>Continue with a passkey</button>
+    {% endif %}
+    {% if let Some(widget) = turnstile_widget %}{{ widget|safe }}
     {% endif %}
     <button class="cf-secondary" type="submit">Email me a link</button>
     {% if !registration_open %}

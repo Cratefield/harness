@@ -663,3 +663,143 @@ async fn the_intents_step_refuses_an_exclusive_mix_and_an_unknown_key() {
 fn url_encode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
+
+// --- hardening: intents= never overwrites, return paths, deferred insert -----
+
+#[pollster::test]
+async fn an_application_answer_never_overwrites_one_already_recorded() {
+    let kit = kit(&[]);
+    let id = public_client(&kit, Some(builder_list()), false).await;
+    let cookie = signed_in(&kit, "u1").await;
+    cratefield_auth_core::intents::record(&*kit.db, &at(EPOCH), "u1", &id, &["buyer".to_owned()])
+        .await
+        .expect("record");
+
+    // The application asks for "builder" on a sign-in; the stored answer stands.
+    let response = send(
+        &kit,
+        Method::GET,
+        &authorize_uri(&id, "&intents=builder"),
+        Some(&cookie),
+        &[],
+        None,
+    )
+    .await;
+    let tokens = redeem(&kit, &id, &location_of(&response)).await;
+    let id_claims = claims_of(tokens["id_token"].as_str().expect("id token"));
+    assert_eq!(id_claims["intents"], json!(["buyer"]));
+    assert_eq!(
+        cratefield_auth_core::intents::chosen(&*kit.db, "u1", &id)
+            .await
+            .expect("query"),
+        Some(vec!["buyer".to_owned()])
+    );
+}
+
+#[pollster::test]
+async fn an_account_with_no_answer_takes_the_application_answer() {
+    let kit = kit(&[]);
+    let id = public_client(&kit, Some(builder_list()), false).await;
+    let cookie = signed_in(&kit, "u1").await;
+    send(
+        &kit,
+        Method::GET,
+        &authorize_uri(&id, "&intents=builder"),
+        Some(&cookie),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(
+        cratefield_auth_core::intents::chosen(&*kit.db, "u1", &id)
+            .await
+            .expect("query"),
+        Some(vec!["builder".to_owned()])
+    );
+}
+
+#[pollster::test]
+async fn the_intents_prompt_still_changes_a_recorded_answer() {
+    let kit = kit(&[]);
+    let id = public_client(&kit, Some(builder_list()), false).await;
+    let cookie = signed_in(&kit, "u1").await;
+    cratefield_auth_core::intents::record(&*kit.db, &at(EPOCH), "u1", &id, &["buyer".to_owned()])
+        .await
+        .expect("record");
+    let uri = authorize_uri(&id, "&prompt=intents");
+    let answered = send(
+        &kit,
+        Method::POST,
+        &format!("{BASE}/intents"),
+        Some(&cookie),
+        &[
+            ("host", AUTH_HOST),
+            ("origin", "https://auth.example.test"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+        Some(&format!("return_to={}&intents=builder", url_encode(&uri))),
+    )
+    .await;
+    assert_eq!(answered.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        cratefield_auth_core::intents::chosen(&*kit.db, "u1", &id)
+            .await
+            .expect("query"),
+        Some(vec!["builder".to_owned()])
+    );
+}
+
+#[pollster::test]
+async fn a_return_path_with_a_control_character_or_an_overlong_value_is_refused() {
+    let kit = kit(&[]);
+    let id = public_client(&kit, Some(builder_list()), false).await;
+    let cookie = signed_in(&kit, "u1").await;
+    let base = authorize_uri(&id, "");
+    let hostile = [
+        format!("{base}&x=\n\r"),
+        format!("{}&pad={}", base, "a".repeat(4100)),
+        "/\\evil.example/v1/auth-core/authorize".to_owned(),
+    ];
+    for path in hostile {
+        let response = send(
+            &kit,
+            Method::POST,
+            &format!("{BASE}/intents"),
+            Some(&cookie),
+            &[
+                ("host", AUTH_HOST),
+                ("origin", "https://auth.example.test"),
+                ("sec-fetch-site", "same-origin"),
+            ],
+            Some(&format!("return_to={}&intents=builder", url_encode(&path))),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+}
+
+#[pollster::test]
+async fn a_second_account_for_one_email_is_never_inserted() {
+    let kit = kit(&[]);
+    seed_user(&kit, "ada").await;
+    let duplicate = UserRow {
+        id: "ada-2".to_owned(),
+        display_name: None,
+        primary_email: Some("ada@example.com".to_owned()),
+        primary_email_verified: false,
+        locale: None,
+        status: "active".to_owned(),
+        created_at: iso(EPOCH),
+        updated_at: iso(EPOCH),
+    };
+    let inserted = cratefield_auth_core::insert_user_if_email_free(&*kit.db, &duplicate)
+        .await
+        .expect("query");
+    assert!(!inserted, "the address already has an account");
+    assert!(
+        cratefield_auth_core::user_by_primary_email(&*kit.db, "ada@example.com")
+            .await
+            .expect("query")
+            .is_some_and(|user| user.id == "ada")
+    );
+}

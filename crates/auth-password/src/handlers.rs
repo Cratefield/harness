@@ -568,7 +568,7 @@ padding:0 1rem\">{body}</body></html>"
     if site_key.is_some() {
         // This page's own styles are inline, so the policy allows them;
         // nothing else is opened but Turnstile.
-        if let Ok(value) = header::HeaderValue::from_str(&turnstile_csp(None)) {
+        if let Ok(value) = header::HeaderValue::from_str(&turnstile_csp(None, None)) {
             response
                 .headers_mut()
                 .insert(header::CONTENT_SECURITY_POLICY, value);
