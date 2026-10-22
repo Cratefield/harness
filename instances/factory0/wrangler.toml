@@ -123,7 +123,7 @@ period = 60
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "factory0-auth-production"
-database_id = "REPLACE_WITH_PRODUCTION_D1_ID"
+database_id = "4173cdb8-6a36-4204-bfba-c6f353c64cec"
 migrations_dir = "../../crates/auth-worker/migrations"
 
 [env.production.triggers]
