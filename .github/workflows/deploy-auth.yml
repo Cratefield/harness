@@ -13,8 +13,9 @@ name: deploy auth
 # Cloudflare credentials are environment-scoped secrets
 # (`auth-<app>-staging`, `auth-<app>-production`), so a self-hosted instance
 # and a Cratefield-managed one can live on different Cloudflare accounts.
-# An instance whose D1 ids are still `REPLACE_WITH_*` placeholders is not
-# provisioned yet and is skipped with a notice rather than failed.
+# An instance whose D1 ids are still placeholders (`REPLACE_WITH_*`, or
+# `*_D1_ID` as in instances/ledgers) is not provisioned yet and is skipped
+# with a notice rather than failed.
 #
 # The production trigger is `auth-v*` rather than `v*`, because a bare `v*`
 # tag in this repository is a harness release, not an auth deploy.
@@ -118,7 +119,9 @@ jobs:
           env = top if os.environ["TARGET_ENV"] == "staging" else top["env"]["production"]
           url = env["vars"]["AUTH_PUBLIC_URL"].rstrip("/")
           d1 = env["d1_databases"][0]["database_id"]
-          ready = "false" if d1.startswith("REPLACE_WITH_") else "true"
+          # Placeholders: `REPLACE_WITH_*` (the usual) and `*_D1_ID` (instances/ledgers).
+          placeholder = d1.startswith("REPLACE_WITH_") or d1.endswith("_D1_ID")
+          ready = "false" if placeholder else "true"
           print(f"url={url}")
           print(f"ready={ready}")
           print(f"env_flag={'' if os.environ['TARGET_ENV'] == 'staging' else '--env production'}")

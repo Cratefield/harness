@@ -68,10 +68,10 @@ npx wrangler d1 create <app>-auth-staging
 npx wrangler d1 create <app>-auth-production
 ```
 
-Paste the two ids in place of `REPLACE_WITH_STAGING_D1_ID` and
-`REPLACE_WITH_PRODUCTION_D1_ID`. Until they are real ids, the deploy
-workflow skips the instance with a notice. Migrations are applied by the
-workflow before every deploy (`wrangler d1 migrations apply DB --remote`),
+Paste the two ids in place of the placeholders (`REPLACE_WITH_STAGING_D1_ID`
+and `REPLACE_WITH_PRODUCTION_D1_ID`, or any `*_D1_ID` name). Until they are
+real ids, the deploy workflow skips the instance with a notice. Migrations
+are applied by the workflow before every deploy (`wrangler d1 migrations apply DB --remote`),
 from `crates/auth-worker/migrations`.
 
 ## 3. Domain
