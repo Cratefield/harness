@@ -35,7 +35,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 
 | Crate | Version | HARNESS_API | `cratefield-core` range |
 |---|---|---|---|
-| `cratefield` | 0.2.6 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield` | 0.2.7 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-access` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-accounts` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-adapter-anthropic` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
@@ -114,7 +114,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-tables` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-tables-api` | 0.1.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-testing` | 0.5.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-ui` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-ui` | 0.4.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-ui-generator` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-waitlist` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `d1-blob-canary` *(not published)* | 0.1.0 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |

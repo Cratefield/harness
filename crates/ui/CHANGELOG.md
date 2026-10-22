@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/Cratefield/harness/compare/cratefield-ui-v0.4.2...cratefield-ui-v0.4.3) - 2026-10-22
+
+### Fixed
+
+- *(auth)* render the Turnstile widget on captcha-guarded auth pages ([#926](https://github.com/Cratefield/harness/pull/926))
+
 ## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-ui-v0.4.1...cratefield-ui-v0.4.2) - 2026-10-19
 
 ### Other
