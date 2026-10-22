@@ -38,7 +38,7 @@ jobs:
       # Node 24 like the other npm jobs.
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
       - run: npm ci
       - name: Contract tests
         run: npm test -w @cratefield/ui-message-contract

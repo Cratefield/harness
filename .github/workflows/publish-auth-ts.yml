@@ -48,7 +48,7 @@ jobs:
       # the registry for both the publish and the OIDC handshake.
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24.22.1'
           registry-url: https://registry.npmjs.org
       - run: npm ci
       # The workerd test leg carries its linux-x64 binary in the npm package.
