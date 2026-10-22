@@ -11,7 +11,9 @@ use crate::fields::{Field, Values, Widget, humanize};
 /// Cloudflare Turnstile's script and iframe origin, allowed by the page
 /// CSP only when a captcha widget is rendered.
 pub const TURNSTILE_ORIGIN: &str = "https://challenges.cloudflare.com";
-const TURNSTILE_SCRIPT: &str = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+/// Turnstile's loader. Shared with `auth-core`'s hosted pages so both
+/// render the same script, from the same origin the CSP allows.
+pub const TURNSTILE_SCRIPT: &str = "https://challenges.cloudflare.com/turnstile/v0/api.js";
 
 /// What a form needs to render, independent of where it came from.
 pub struct FormSpec<'a> {

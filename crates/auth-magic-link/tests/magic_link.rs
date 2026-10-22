@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use cratefield_auth_core::{AuthCore, STATUS_ACTIVE, UserRow, insert_user, user_by_primary_email};
 use cratefield_auth_magic_link::MagicLink;
 use cratefield_core::{
-    Clock, Config, Database, Decision, MailError, Mailer, MapConfig, Message, SendOutcome,
+    Captcha, Clock, Config, Database, Decision, MailError, Mailer, MapConfig, Message, SendOutcome,
     Statement,
 };
 use cratefield_testing::TestHarness;
@@ -107,6 +107,24 @@ fn kit_rate_limited() -> Kit {
 }
 
 fn kit_limited(extra: &[(&str, &str)], limiter: cratefield_testing::FakeRateLimiter) -> Kit {
+    kit_full(extra, limiter, None)
+}
+
+/// A kit with a `Captcha` port, as a production instance with
+/// `TURNSTILE_SECRET` has. The site key is whatever `extra` names.
+fn kit_captcha(captcha: cratefield_testing::FakeCaptcha, extra: &[(&str, &str)]) -> Kit {
+    kit_full(
+        extra,
+        cratefield_testing::FakeRateLimiter::always_allow(),
+        Some(captcha),
+    )
+}
+
+fn kit_full(
+    extra: &[(&str, &str)],
+    limiter: cratefield_testing::FakeRateLimiter,
+    captcha: Option<cratefield_testing::FakeCaptcha>,
+) -> Kit {
     let mut pairs = vec![
         ("AUTH_MAGIC_LINK_PUBLIC_BASE".to_owned(), BASE.to_owned()),
         (
@@ -132,6 +150,7 @@ fn kit_limited(extra: &[(&str, &str)], limiter: cratefield_testing::FakeRateLimi
             ports.rate_limiter = Some(Arc::new(limiter_for_ports));
             ports.clock = Some(clock_for_ports);
             ports.config = config_for_ports;
+            ports.captcha = captcha.map(|captcha| Arc::new(captcha) as Arc<dyn Captcha>);
         },
     );
     let db = harness.db.clone();
@@ -1589,5 +1608,217 @@ fn the_limit_is_keyed_on_the_address_as_well_as_the_caller() {
             "the address was not a limit key: one request consulted the limiter {}",
             kit.limiter.calls()
         );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The captcha on the form (the page a browser gets, and what it posts back).
+
+const SITE_KEY: &str = "0x4AAAAAAA-test-site-key";
+
+/// The one form-post shape a browser sends: the address, and the widget's
+/// answer under the name Turnstile gives it.
+fn form_body(email: &str, turnstile_response: Option<&str>) -> String {
+    let mut body = format!("email={}", email.replace('@', "%40"));
+    if let Some(answer) = turnstile_response {
+        body.push_str("&cf-turnstile-response=");
+        body.push_str(answer);
+    }
+    body
+}
+
+/// Each event as its `(name, value)` fields.
+type Recorded = Vec<Vec<(String, String)>>;
+
+/// Records the structured fields of every event, so a test can assert what
+/// an operator would see in the log and nothing else.
+#[derive(Clone, Default)]
+struct Events(Arc<RwLock<Recorded>>);
+
+struct Visit<'a>(&'a mut Vec<(String, String)>);
+
+impl tracing::field::Visit for Visit<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.push((field.name().to_owned(), format!("{value:?}")));
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.push((field.name().to_owned(), value.to_owned()));
+    }
+}
+
+impl tracing::Subscriber for Events {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut fields = Vec::new();
+        event.record(&mut Visit(&mut fields));
+        self.0.write().expect("log lock").push(fields);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+impl Events {
+    /// The refusals the captcha logged, as their `reason` values.
+    fn refusals(&self) -> Vec<String> {
+        self.0
+            .read()
+            .expect("log lock")
+            .iter()
+            .filter(|fields| {
+                fields
+                    .iter()
+                    .any(|(k, v)| k == "event" && v == "captcha.refused")
+            })
+            .filter_map(|fields| {
+                fields
+                    .iter()
+                    .find(|(k, _)| k == "reason")
+                    .map(|(_, v)| v.clone())
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn the_page_renders_the_widget_script_and_policy_when_a_captcha_is_wired() {
+    pollster::block_on(async {
+        let kit = kit_captcha(
+            cratefield_testing::FakeCaptcha::allow_all(),
+            &[("TURNSTILE_SITE_KEY", SITE_KEY)],
+        );
+        let form = get_page(&kit, START).await;
+        assert_eq!(form.status, StatusCode::OK);
+        let html = form.text();
+        assert!(html.contains("class=\"cf-turnstile\""), "{html}");
+        assert!(
+            html.contains(&format!("data-sitekey=\"{SITE_KEY}\"")),
+            "{html}"
+        );
+        assert!(html.contains("data-action=\"magic-link\""), "{html}");
+        assert!(
+            html.contains(
+                "src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\" async defer"
+            ),
+            "{html}"
+        );
+        let csp = form
+            .headers
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|value| value.to_str().ok())
+            .expect("a CSP on a page with a widget");
+        assert!(
+            csp.contains("script-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+        assert!(
+            csp.contains("frame-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+        assert!(
+            csp.contains("connect-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+        assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+    });
+}
+
+#[test]
+fn the_page_has_no_widget_when_no_captcha_or_no_site_key_is_configured() {
+    pollster::block_on(async {
+        // No Captcha port: the form is the plain page it always was.
+        let plain = get_page(&kit(), START).await;
+        assert!(!plain.text().contains("cf-turnstile"), "{}", plain.text());
+        assert!(!plain.text().contains("<script"), "{}", plain.text());
+        // The harness adds its own `frame-ancestors` policy to `/v1`; the page
+        // itself must not open Turnstile's origin.
+        let csp: Vec<_> = plain
+            .headers
+            .get_all(header::CONTENT_SECURITY_POLICY)
+            .iter()
+            .collect();
+        assert!(
+            csp.iter().all(|value| !value
+                .to_str()
+                .unwrap_or_default()
+                .contains("challenges.cloudflare")),
+            "{csp:?}"
+        );
+
+        // A Captcha port with no site key renders no widget either. That
+        // instance is refused at boot (`validate_config`); the page itself
+        // must still never render an empty `data-sitekey`.
+        let keyless = kit_captcha(cratefield_testing::FakeCaptcha::allow_all(), &[]);
+        let page = get_page(&keyless, START).await;
+        assert!(!page.text().contains("cf-turnstile"), "{}", page.text());
+    });
+}
+
+#[test]
+fn a_form_post_with_a_valid_widget_answer_sends_the_mail() {
+    pollster::block_on(async {
+        let kit = kit_captcha(
+            cratefield_testing::FakeCaptcha::with_tokens(["good-token"]),
+            &[("TURNSTILE_SITE_KEY", SITE_KEY)],
+        );
+        seed(&kit, "ada@example.com", false).await;
+        let posted = post_form(
+            &kit,
+            START,
+            &form_body("ada@example.com", Some("good-token")),
+        )
+        .await;
+        assert_eq!(posted.status, StatusCode::ACCEPTED, "{}", posted.text());
+        assert_eq!(kit.outbox.count(), 1, "a passed captcha sent no mail");
+    });
+}
+
+#[test]
+fn a_refused_or_missing_answer_is_answered_as_sent_and_logged_without_pii() {
+    pollster::block_on(async {
+        let kit = kit_captcha(
+            cratefield_testing::FakeCaptcha::with_tokens(["good-token"]),
+            &[("TURNSTILE_SITE_KEY", SITE_KEY)],
+        );
+        seed(&kit, "ada@example.com", false).await;
+        let events = Events::default();
+        // Thread-local for this test's single-threaded `block_on`.
+        let _guard = tracing::subscriber::set_default(events.clone());
+
+        let missing = post_form(&kit, START, &form_body("ada@example.com", None)).await;
+        let rejected = post_form(
+            &kit,
+            START,
+            &form_body("ada@example.com", Some("bad-token")),
+        )
+        .await;
+        let sent = post_form(
+            &kit,
+            START,
+            &form_body("ada@example.com", Some("good-token")),
+        )
+        .await;
+
+        // Anti-enumeration: a refused captcha answers byte for byte like a
+        // sent one, and it sends nothing.
+        assert_eq!(missing.status, sent.status);
+        assert_eq!(missing.body, sent.body, "a refusal is distinguishable");
+        assert_eq!(rejected.body, sent.body);
+        assert_eq!(kit.outbox.count(), 1, "only the passed post sent a mail");
+
+        // The operator's signal: one line per refusal, with the reason.
+        assert_eq!(events.refusals(), ["missing_token", "rejected"]);
+        let all = format!("{:?}", events.0.read().expect("log lock"));
+        assert!(
+            !all.contains("ada@example.com"),
+            "an address reached the log: {all}"
+        );
+        assert!(!all.contains("bad-token"), "a token reached the log: {all}");
     });
 }

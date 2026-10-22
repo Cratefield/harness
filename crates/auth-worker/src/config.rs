@@ -216,6 +216,13 @@ impl AuthWorkerConfig {
         // and has no `Env` of its own.
         let privacy_provider = get(cfg, PRIVACY_PROVIDER_SECRET_KEY).is_some();
 
+        // The `Captcha` port exists when `TURNSTILE_SECRET` does (lib.rs
+        // `build_captcha`). Without `TURNSTILE_SITE_KEY` its widget never
+        // renders, so every captcha-guarded form refuses silently: refuse
+        // the boot instead.
+        if let Some(problem) = auth_core::page::turnstile_config_problem(cfg) {
+            errors.push(problem);
+        }
         errors.into_result()?;
         let (Some(public_url), Some(venture_name)) = (public_url, venture_name) else {
             // Both are pushed as errors when missing, so this is unreachable

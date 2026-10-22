@@ -779,7 +779,7 @@ fn respond(
         &body,
     );
     let mut response = Html(page.into_string()).into_response();
-    let csp = content_security_policy(theme.as_deref(), turnstile);
+    let csp = content_security_policy(theme.as_deref(), turnstile, false);
     if let Ok(value) = HeaderValue::from_str(&csp) {
         response
             .headers_mut()
@@ -817,7 +817,7 @@ fn respond_admin(state: &UiState, title: &str, body: &maud::Markup, logged_in: b
         body,
     );
     let mut response = Html(page.into_string()).into_response();
-    let csp = content_security_policy(theme.as_deref(), false);
+    let csp = content_security_policy(theme.as_deref(), false, false);
     if let Ok(value) = HeaderValue::from_str(&csp) {
         response
             .headers_mut()
@@ -850,8 +850,23 @@ fn effective_theme_css(state: &UiState) -> Option<String> {
         .or_else(|| state.ui.theme_css.clone())
 }
 
-fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {
+/// The `Content-Security-Policy` for a page this crate or `auth-core`
+/// renders.
+///
+/// `turnstile` opens the Turnstile origin for script, frame and connect.
+/// `inline_styles` allows `style-src 'unsafe-inline'`, which the hosted
+/// auth pages need (their brand theme is an inline `<style>` block); the
+/// `cf-*` UI pages never set it.
+#[must_use]
+pub fn content_security_policy(
+    theme_css: Option<&str>,
+    turnstile: bool,
+    inline_styles: bool,
+) -> String {
     let mut style = String::from("'self'");
+    if inline_styles {
+        style.push_str(" 'unsafe-inline'");
+    }
     // `cratefield_core::origin_of`, not a local split on "://" (issue
     // #215). This decides which origins a page may load stylesheets from,
     // so a scheme this harness would not fetch, a userinfo prefix or an
@@ -861,17 +876,18 @@ fn content_security_policy(theme_css: Option<&str>, turnstile: bool) -> String {
         style.push(' ');
         style.push_str(&origin);
     }
-    let (script, frame) = if turnstile {
+    let (script, frame, connect) = if turnstile {
         (
             render::TURNSTILE_ORIGIN.to_owned(),
             render::TURNSTILE_ORIGIN.to_owned(),
+            format!("connect-src {}; ", render::TURNSTILE_ORIGIN),
         )
     } else {
-        ("'none'".to_owned(), "'none'".to_owned())
+        ("'none'".to_owned(), "'none'".to_owned(), String::new())
     };
     format!(
         "default-src 'none'; style-src {style}; script-src {script}; frame-src {frame}; \
-         img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+         {connect}img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
 }
 
@@ -910,15 +926,26 @@ mod tests {
 
     #[test]
     fn csp_opens_only_what_the_page_uses() {
-        let plain = content_security_policy(None, false);
+        let plain = content_security_policy(None, false, false);
         assert!(plain.contains("script-src 'none'"));
         assert!(plain.contains("style-src 'self';"));
-        let themed = content_security_policy(Some("https://cdn.example/theme.css"), true);
+        let themed = content_security_policy(Some("https://cdn.example/theme.css"), true, false);
         assert!(themed.contains("style-src 'self' https://cdn.example;"));
         assert!(themed.contains("script-src https://challenges.cloudflare.com;"));
         assert!(themed.contains("frame-src https://challenges.cloudflare.com;"));
-        let local = content_security_policy(Some("/theme.css"), false);
+        let local = content_security_policy(Some("/theme.css"), false, false);
         assert!(local.contains("style-src 'self';"));
+        // Turnstile also needs to reach its own origin for the widget's
+        // requests, and only when the widget is on the page.
+        assert!(themed.contains("connect-src https://challenges.cloudflare.com;"));
+        assert!(!plain.contains("connect-src"));
+        // Hosted pages carry their brand theme as an inline stylesheet.
+        let hosted = content_security_policy(None, true, true);
+        assert!(
+            hosted.contains("style-src 'self' 'unsafe-inline';"),
+            "{hosted}"
+        );
+        assert!(!local.contains("unsafe-inline"));
     }
 
     /// What the loose `origin_of` let into `style-src`, and no longer does
@@ -935,7 +962,7 @@ mod tests {
             "theme.css",
             "",
         ] {
-            let csp = content_security_policy(Some(bad), false);
+            let csp = content_security_policy(Some(bad), false, false);
             assert!(
                 csp.contains("style-src 'self';"),
                 "`{bad}` must add nothing to style-src: {csp}"
@@ -946,12 +973,14 @@ mod tests {
     /// The two that are the *same* origin and used to be two entries.
     #[test]
     fn an_origin_is_normalised_before_it_reaches_style_src() {
-        let default_port = content_security_policy(Some("https://CDN.Example:443/a.css"), false);
+        let default_port =
+            content_security_policy(Some("https://CDN.Example:443/a.css"), false, false);
         assert!(
             default_port.contains("style-src 'self' https://cdn.example;"),
             "host lowercased and the default port dropped: {default_port}"
         );
-        let other_port = content_security_policy(Some("https://cdn.example:8443/a.css"), false);
+        let other_port =
+            content_security_policy(Some("https://cdn.example:8443/a.css"), false, false);
         assert!(
             other_port.contains("style-src 'self' https://cdn.example:8443;"),
             "a non-default port is part of the origin and stays: {other_port}"
@@ -962,7 +991,7 @@ mod tests {
         // and which a browser therefore never matches — so the stylesheet
         // was blocked, and for the wrong reason. The origin here is
         // `evil.test`, and saying so is the honest answer.
-        let userinfo = content_security_policy(Some("https://a:b@evil.test/x.css"), false);
+        let userinfo = content_security_policy(Some("https://a:b@evil.test/x.css"), false, false);
         assert!(
             userinfo.contains("style-src 'self' https://evil.test;"),
             "the origin is the host, without the credentials: {userinfo}"

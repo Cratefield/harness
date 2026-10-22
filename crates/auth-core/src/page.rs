@@ -20,10 +20,80 @@
 
 use askama::Template;
 use axum::response::{IntoResponse, Response};
-use cratefield_core::Problem;
+use cratefield_core::{ModuleContext, Problem};
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 
 use crate::brand::Brand;
+
+/// The Turnstile site key a captcha-guarded form renders its widget with.
+///
+/// `None` when the form should show no widget: the instance has no
+/// `Captcha` port, or it has one but no `TURNSTILE_SITE_KEY`. The second
+/// case is refused at boot ([`turnstile_config_problem`]); this stays
+/// `None`-safe so a page never renders a widget with an empty key.
+#[must_use]
+pub fn turnstile_site_key(ctx: &ModuleContext) -> Option<String> {
+    ctx.ports.captcha.as_ref()?;
+    ctx.config
+        .get(cratefield_ui::TURNSTILE_SITE_KEY)
+        .filter(|key| !key.is_empty())
+}
+
+/// The Turnstile widget for a form, to sit inside its `<form>` (Turnstile
+/// then adds the `cf-turnstile-response` field to the post). `action` is
+/// the label Turnstile reports in its analytics; `scheme` is the brand's
+/// `dark` or `light`, which the widget follows.
+#[must_use]
+pub fn turnstile_widget(site_key: &str, action: &str, scheme: &str) -> String {
+    let theme = if scheme == "light" { "light" } else { "dark" };
+    format!(
+        "<div class=\"cf-turnstile\" data-sitekey=\"{key}\" data-action=\"{action}\" \
+data-theme=\"{theme}\"></div>",
+        key = escape(site_key),
+        action = escape(action),
+    )
+}
+
+/// The `Content-Security-Policy` a page carrying the Turnstile widget
+/// answers with: the UI crate's policy, with Turnstile's origin open for
+/// script, frame and connect, and inline styles allowed because the brand
+/// theme is an inline stylesheet. `font_css_url` is the brand's font
+/// stylesheet, if any; its files come from Google's font host.
+#[must_use]
+pub fn turnstile_csp(font_css_url: Option<&str>) -> String {
+    let policy = cratefield_ui::content_security_policy(font_css_url, true, true);
+    match font_css_url {
+        Some(_) => format!("{policy}; font-src 'self' https://fonts.gstatic.com"),
+        None => policy,
+    }
+}
+
+/// A boot-time refusal for a captcha configured without its site key.
+///
+/// `TURNSTILE_SECRET` is what makes the `Captcha` port exist; without
+/// `TURNSTILE_SITE_KEY` every captcha-guarded form renders no widget, so no
+/// browser can ever pass it and every such request is answered as if sent.
+/// That is silent, which is why it is refused here instead.
+#[must_use]
+pub fn turnstile_config_problem(cfg: &dyn cratefield_core::Config) -> Option<String> {
+    let has_secret = cfg
+        .get(TURNSTILE_SECRET_KEY)
+        .is_some_and(|value| !value.is_empty());
+    let has_site_key = cfg
+        .get(cratefield_ui::TURNSTILE_SITE_KEY)
+        .is_some_and(|value| !value.is_empty());
+    (has_secret && !has_site_key).then(|| {
+        format!(
+            "{} is required when {TURNSTILE_SECRET_KEY} is set: without it the captcha \
+             widget cannot render and every captcha-guarded form silently refuses",
+            cratefield_ui::TURNSTILE_SITE_KEY
+        )
+    })
+}
+
+/// The secret that makes the Turnstile `Captcha` port exist (the adapter
+/// reads it at composition; this crate only checks it is paired with a key).
+pub const TURNSTILE_SECRET_KEY: &str = "TURNSTILE_SECRET";
 
 /// The referrer policy every hosted page answers with: see the module
 /// documentation for why it is not `no-referrer`.
@@ -120,6 +190,8 @@ struct HostedPageTemplate<'a> {
     title: &'a str,
     body: &'a str,
     toasts: &'a [Toast],
+    /// The Turnstile loader, when the page carries the widget.
+    turnstile: Option<&'a str>,
 }
 
 /// One hosted page: a title, a body, and any notices.
@@ -133,6 +205,7 @@ pub struct HostedPage {
     title: String,
     body: String,
     toasts: Vec<Toast>,
+    turnstile: bool,
 }
 
 impl HostedPage {
@@ -144,7 +217,17 @@ impl HostedPage {
             title: title.into(),
             body: String::new(),
             toasts: Vec::new(),
+            turnstile: false,
         }
+    }
+
+    /// Marks the page as carrying a Turnstile widget: its loader goes in
+    /// the head and its answer gets the widget's CSP. The caller writes the
+    /// widget itself ([`turnstile_widget`]) into the body.
+    #[must_use]
+    pub fn turnstile(mut self) -> Self {
+        self.turnstile = true;
+        self
     }
 
     /// The status code.
@@ -177,17 +260,27 @@ impl HostedPage {
             title: &self.title,
             body: &self.body,
             toasts: &self.toasts,
+            turnstile: self
+                .turnstile
+                .then_some(cratefield_ui::render::TURNSTILE_SCRIPT),
         }
         .render();
         match rendered {
-            Ok(document) => with_page_headers(
-                (
+            Ok(document) => {
+                let mut response = (
                     self.status,
                     [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
                     document,
                 )
-                    .into_response(),
-            ),
+                    .into_response();
+                if self.turnstile {
+                    with_csp(
+                        &mut response,
+                        &turnstile_csp(brand.theme.font_css_url.as_deref()),
+                    );
+                }
+                with_page_headers(response)
+            }
             Err(err) => {
                 tracing::error!(error = %err, "a hosted page failed to render");
                 Problem::internal().into_response()
@@ -207,6 +300,16 @@ pub fn with_page_headers(mut response: Response) -> Response {
         HeaderValue::from_static(PAGE_REFERRER_POLICY),
     );
     response
+}
+
+/// Sets `Content-Security-Policy` on a response, unless the policy is not a
+/// valid header value (which none this crate builds is).
+fn with_csp(response: &mut Response, policy: &str) {
+    if let Ok(value) = HeaderValue::from_str(policy) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_SECURITY_POLICY, value);
+    }
 }
 
 /// Escapes the five characters that can leave an HTML attribute or a
@@ -334,6 +437,106 @@ mod tests {
         assert!(html.contains("href=\"/v1/m/start\""), "{html}");
         assert!(html.contains("request 01REQ"), "{html}");
         assert!(!html.contains("\"type\""), "problem JSON leaked: {html}");
+    }
+
+    #[test]
+    fn a_turnstile_page_loads_its_script_and_policy_and_a_plain_page_does_not() {
+        let plain = HostedPage::new("Sign in")
+            .body("<h1>Hi</h1>")
+            .render(&brand());
+        assert!(
+            plain
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .is_none(),
+            "a page without a widget set a policy"
+        );
+        assert!(!body(plain).contains("challenges.cloudflare"));
+
+        let widget = turnstile_widget("0x-key", "magic-link", "dark");
+        let guarded = HostedPage::new("Sign in")
+            .turnstile()
+            .body(format!("<form>{widget}</form>"))
+            .render(&brand());
+        let csp = guarded
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|value| value.to_str().ok())
+            .expect("a widget page carries its policy")
+            .to_owned();
+        assert!(
+            csp.contains("script-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+        assert!(
+            csp.contains("frame-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+        assert!(
+            csp.contains("connect-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+        assert!(csp.contains("style-src 'self' 'unsafe-inline';"), "{csp}");
+        assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+        let html = body(guarded);
+        assert!(
+            html.contains(
+                "<script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\" async defer>"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains("<div class=\"cf-turnstile\" data-sitekey=\"0x-key\" data-action=\"magic-link\" data-theme=\"dark\">"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn the_widget_escapes_its_key_and_follows_the_brand_scheme() {
+        let html = turnstile_widget("a\"b<c", "x", "light");
+        assert!(html.contains("data-sitekey=\"a&quot;b&lt;c\""), "{html}");
+        assert!(html.contains("data-theme=\"light\""), "{html}");
+    }
+
+    #[test]
+    fn a_font_stylesheet_also_opens_its_font_files() {
+        assert!(!turnstile_csp(None).contains("font-src"));
+        assert!(
+            turnstile_csp(Some("https://fonts.googleapis.com/css2?family=X"))
+                .contains("font-src 'self' https://fonts.gstatic.com")
+        );
+    }
+
+    #[test]
+    fn a_captcha_secret_without_a_site_key_is_a_boot_problem() {
+        let config = |pairs: &[(&str, &str)]| {
+            cratefield_core::MapConfig::from_pairs(
+                pairs
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+            )
+        };
+        let problem = turnstile_config_problem(&config(&[("TURNSTILE_SECRET", "s")]))
+            .expect("a secret with no key is refused");
+        assert!(problem.contains("TURNSTILE_SITE_KEY"), "{problem}");
+        assert!(
+            turnstile_config_problem(&config(&[
+                ("TURNSTILE_SECRET", "s"),
+                ("TURNSTILE_SITE_KEY", "0x-key"),
+            ]))
+            .is_none()
+        );
+        // An empty key is no key.
+        assert!(
+            turnstile_config_problem(&config(&[
+                ("TURNSTILE_SECRET", "s"),
+                ("TURNSTILE_SITE_KEY", ""),
+            ]))
+            .is_some()
+        );
+        // No captcha at all is not a captcha misconfiguration.
+        assert!(turnstile_config_problem(&config(&[])).is_none());
+        assert!(turnstile_config_problem(&config(&[("TURNSTILE_SITE_KEY", "0x-key")])).is_none());
     }
 
     #[test]

@@ -10,6 +10,7 @@
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use cratefield_auth_core::page::{turnstile_csp, turnstile_site_key, turnstile_widget};
 use cratefield_auth_core::{
     CREDENTIAL_PASSWORD, CredentialRow, IssuedSession, LegacyHashes, Login, PROVIDER_PASSWORD,
     STATUS_ACTIVE, SessionError, TOKEN_PASSWORD_RESET, cookie_value as session_cookie_value,
@@ -149,17 +150,37 @@ pub(crate) async fn captcha_ok(
     let Some(captcha) = state.ctx.ports.captcha.as_deref() else {
         return true;
     };
+    let answer = token.unwrap_or_default();
     let ip = cratefield_core::client_ip(headers);
-    match captcha
-        .verify(token.unwrap_or_default(), ip.as_deref())
-        .await
-    {
-        Ok(verdict) => verdict.ok,
+    match captcha.verify(answer, ip.as_deref()).await {
+        Ok(verdict) if verdict.ok => true,
+        Ok(_) => {
+            // The refusal is answered like any other (anti-enumeration), so
+            // the log line is the only signal: a reason, never the token.
+            let reason = if answer.is_empty() {
+                "missing_token"
+            } else {
+                "rejected"
+            };
+            tracing::warn!(
+                module = "auth-password",
+                event = "captcha.refused",
+                reason,
+                "a captcha was not passed; refusing the request"
+            );
+            false
+        }
         Err(err) => {
             // Fail closed: a captcha that cannot be checked is a captcha
             // that has not been passed. The opposite would make an outage
             // at the captcha provider into an open door here.
-            tracing::warn!(error = %err, "the captcha could not be verified");
+            tracing::warn!(
+                error = %err,
+                module = "auth-password",
+                event = "captcha.refused",
+                reason = "unverifiable",
+                "the captcha could not be verified; refusing the request"
+            );
             false
         }
     }
@@ -410,6 +431,10 @@ struct StartForm {
     password: String,
     #[serde(default)]
     return_to: Option<String>,
+    /// The answer the Turnstile widget adds to the form, when the page
+    /// rendered one.
+    #[serde(default, rename = "cf-turnstile-response")]
+    turnstile_response: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -418,11 +443,13 @@ struct StartQuery {
 }
 
 /// `GET /start?return_to=/path` — the form.
-async fn start(Query(query): Query<StartQuery>) -> Response {
+async fn start(State(state): State<Arc<ModuleState>>, Query(query): Query<StartQuery>) -> Response {
+    let site_key = turnstile_site_key(state.ctx.as_ref());
     form_page(
         safe_return_to(query.return_to.as_deref()).as_deref(),
         None,
         StatusCode::OK,
+        site_key.as_deref(),
     )
 }
 
@@ -438,6 +465,7 @@ async fn start_submit(
     axum::extract::Form(form): axum::extract::Form<StartForm>,
 ) -> Result<Response, Problem> {
     let return_to = safe_return_to(form.return_to.as_deref());
+    let site_key = turnstile_site_key(state.ctx.as_ref());
     match sign_in(
         &state,
         &scope,
@@ -445,7 +473,7 @@ async fn start_submit(
         &uri,
         &form.email,
         &form.password,
-        None,
+        form.turnstile_response.as_deref(),
     )
     .await?
     {
@@ -467,17 +495,26 @@ async fn start_submit(
             return_to.as_deref(),
             Some("That email address and password do not match."),
             StatusCode::UNAUTHORIZED,
+            site_key.as_deref(),
         )),
         Outcome::RateLimited(_) => Ok(form_page(
             return_to.as_deref(),
             Some("Too many attempts just now. Try again shortly."),
             StatusCode::TOO_MANY_REQUESTS,
+            site_key.as_deref(),
         )),
     }
 }
 
-/// The form, with an optional message above it.
-fn form_page(return_to: Option<&str>, message: Option<&str>, status: StatusCode) -> Response {
+/// The form, with an optional message above it. `site_key` is the Turnstile
+/// site key when the instance has a captcha: the widget then sits in the
+/// form, and the page loads Turnstile's script under a CSP that allows it.
+fn form_page(
+    return_to: Option<&str>,
+    message: Option<&str>,
+    status: StatusCode,
+    site_key: Option<&str>,
+) -> Response {
     let hidden = return_to.map_or_else(String::new, |value| {
         format!(
             "<input type=\"hidden\" name=\"return_to\" value=\"{}\">",
@@ -489,6 +526,10 @@ fn form_page(return_to: Option<&str>, message: Option<&str>, status: StatusCode)
     });
     let field = "font:inherit;padding:10px;width:100%;box-sizing:border-box;\
 border:1px solid #ccc;border-radius:6px;margin-bottom:.8rem";
+    // The widget sits inside the form so its answer posts with the fields.
+    let widget = site_key.map_or_else(String::new, |key| {
+        turnstile_widget(key, "password-sign-in", "light")
+    });
     let body = format!(
         "{note}<form method=\"post\">{hidden}\
 <label for=\"email\" style=\"display:block;margin-bottom:.4rem\">Email address</label>\
@@ -497,23 +538,43 @@ autofocus style=\"{field}\">\
 <label for=\"password\" style=\"display:block;margin-bottom:.4rem\">Password</label>\
 <input id=\"password\" name=\"password\" type=\"password\" \
 autocomplete=\"current-password\" required style=\"{field}\">\
+{widget}\
 <button type=\"submit\" style=\"font:inherit;padding:12px 20px;border-radius:6px;\
 border:0;background:#1a1a1a;color:#fff;font-weight:600;cursor:pointer\">Sign in</button></form>"
     );
+    // Turnstile's loader only when the widget is on the page; the CSP only
+    // then too, so a page without a captcha keeps the plain answer it had.
+    let loader = site_key.map_or_else(String::new, |_| {
+        format!(
+            "<script src=\"{}\" async defer></script>",
+            cratefield_ui::render::TURNSTILE_SCRIPT
+        )
+    });
     let document = format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <meta name=\"robots\" content=\"noindex\">\
+{loader}\
 <title>Sign in</title></head>\
 <body style=\"font:16px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:32rem;\
 padding:0 1rem\">{body}</body></html>"
     );
-    (
+    let mut response = (
         status,
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         axum::response::Html(document),
     )
-        .into_response()
+        .into_response();
+    if site_key.is_some() {
+        // This page's own styles are inline, so the policy allows them;
+        // nothing else is opened but Turnstile.
+        if let Ok(value) = header::HeaderValue::from_str(&turnstile_csp(None)) {
+            response
+                .headers_mut()
+                .insert(header::CONTENT_SECURITY_POLICY, value);
+        }
+    }
+    response
 }
 
 /// Only a path on this service: an absolute URL here is an open redirect,
