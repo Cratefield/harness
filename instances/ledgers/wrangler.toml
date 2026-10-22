@@ -1,0 +1,149 @@
+# The `ledgers` auth instance (issue #777): the harness auth Worker
+# (`crates/auth-worker`), deployed for Ledgers on Ledgers' own domain
+# (ledgers.sh) with Ledgers' own branding, D1, secrets and passkey relying
+# party. Hosted by Cratefield on Ledgers' domain (a Cratefield-managed
+# instance). Consumers: Ledgers-sh/ledgers server (`LEDGERS_AUTH_ISSUER`,
+# `LEDGERS_AUTH_CLIENT_ID`) and the Ledgers web app (a public PKCE client,
+# app-staging.ledgers.sh / app.ledgers.sh). See README.md.
+#
+# Deployed by `.github/workflows/deploy-auth.yml` from this directory:
+# `main` -> staging (top level), an `auth-v*` tag -> production
+# (`[env.production]`, behind the `auth-ledgers-production` approval gate).
+# Wrangler does not inherit `[vars]` into an environment, so both blocks
+# carry the full set. Every variable is documented in
+# `crates/auth-worker/README.md`.
+#
+# Not provisioned yet: both D1 ids below are placeholders
+# (LEDGERS_AUTH_STAGING_D1_ID / LEDGERS_AUTH_PROD_D1_ID), so the deploy
+# workflow skips this instance until they are replaced with real ids. Still
+# needed (docs/auth/MANAGED-INSTANCES.md, README.md "Provisioning"):
+# - Create both D1 databases and paste their ids here.
+# - The secrets, by name only: HARNESS_SECRET, ADMIN_TOKEN,
+#   AUTH_CORE_SIGNING_KEYS (+ AUTH_CORE_SIGNING_KEY_ACTIVE), OWLPOST_API_KEY,
+#   TURNSTILE_SECRET. Per environment: `wrangler secret put <NAME> [--env production]`.
+# - The custom domains (routes below) on the Cloudflare account that holds
+#   ledgers.sh, the Turnstile site for both hostnames (replace
+#   LEDGERS_TURNSTILE_SITE_KEY), and the Owlpost sending domain `send.ledgers.sh`.
+name = "ledgers-auth"
+main = "../../crates/auth-worker/build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = false
+# Staging's own hostname; production's is in `[env.production]`.
+route = { pattern = "auth-staging.ledgers.sh", custom_domain = true }
+
+# `worker-build` compiles the package in its working directory, so the build
+# runs in the crate and `main` points at the shim it writes there. Every
+# instance builds the same, unmodified crate.
+[build]
+cwd = "../../crates/auth-worker"
+command = "cargo install -q worker-build && worker-build --release"
+watch_dir = "../../crates/auth-worker/src"
+
+[observability]
+enabled = true
+
+# --- Staging (deployed from `main`) ---
+
+# Workers Rate Limiting backs the harness's throttle; readiness refuses the
+# instance unless a limiter resolves (harness #437). Namespace ids are per
+# account and must not collide with another instance's on the same account.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1801"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ledgers-auth-staging"
+database_id = "LEDGERS_AUTH_STAGING_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+# The meta-module drains Meta deletion jobs on a schedule.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+ENV = "staging"
+AUTH_PUBLIC_URL = "https://auth-staging.ledgers.sh"
+AUTH_CORE_ISSUER = "https://auth-staging.ledgers.sh"
+AUTH_VENTURE_NAME = "ledgers-auth"
+AUTH_CORS_ORIGINS = "https://app-staging.ledgers.sh"
+AUTH_BRAND_NAME = "Ledgers"
+AUTH_BRAND_FOOTER = "Ledgers"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+# Passkeys are bound to the registrable domain, so one RP id covers the auth
+# host and the app hosts (app-staging/app.ledgers.sh) without a re-enrolment.
+# Origins must be the RP id or a subdomain of it; the ceremonies run on the
+# auth host, so the origin is that host. Not changeable later: see README.md.
+AUTH_PASSKEYS_RP_ID = "ledgers.sh"
+AUTH_PASSKEYS_ORIGINS = "https://auth-staging.ledgers.sh"
+AUTH_PASSKEYS_OFFER_AFTER_SIGNIN = "true"
+# Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
+# the OWLPOST_API_KEY secret exists, and boots without mail until then
+# (production keeps `owlpost` and refuses to boot without the key).
+MAIL_FROM = "Ledgers <no-reply@send.ledgers.sh>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth-staging.ledgers.sh"
+AUTH_MAGIC_LINK_ALLOW_REGISTRATION = "true"
+AUTH_MAGIC_LINK_MAIL_FROM = "Ledgers <sign-in@send.ledgers.sh>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.ledgers.sh"
+AUTH_PASSWORD_MAIL_FROM = "Ledgers <sign-in@send.ledgers.sh>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.ledgers.sh"
+AUTH_META_REDIRECT_BASE = "https://auth-staging.ledgers.sh"
+# Turnstile: the site key is public (the Turnstile widget on the hosted
+# pages); the secret is `TURNSTILE_SECRET`. The verdict must name this host.
+TURNSTILE_SITE_KEY = "LEDGERS_TURNSTILE_SITE_KEY"
+AUTH_TURNSTILE_HOSTNAME = "auth-staging.ledgers.sh"
+# needs-human: no Ledgers logo, accent, support address, privacy or terms
+# URL is committed yet; add AUTH_BRAND_LOGO_URL, AUTH_BRAND_ACCENT,
+# AUTH_BRAND_SUPPORT_EMAIL, AUTH_BRAND_PRIVACY_URL and AUTH_BRAND_TERMS_URL
+# (both environments) once they exist on ledgers.sh.
+
+# --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
+[env.production]
+route = { pattern = "auth.ledgers.sh", custom_domain = true }
+
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1802"
+
+[env.production.ratelimits.simple]
+limit = 30
+period = 60
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ledgers-auth-production"
+database_id = "LEDGERS_AUTH_PROD_D1_ID"
+migrations_dir = "../../crates/auth-worker/migrations"
+
+[env.production.triggers]
+crons = ["*/15 * * * *"]
+
+[env.production.vars]
+ENV = "production"
+AUTH_PUBLIC_URL = "https://auth.ledgers.sh"
+AUTH_CORE_ISSUER = "https://auth.ledgers.sh"
+AUTH_VENTURE_NAME = "ledgers-auth"
+AUTH_CORS_ORIGINS = "https://app.ledgers.sh"
+AUTH_BRAND_NAME = "Ledgers"
+AUTH_BRAND_FOOTER = "Ledgers"
+AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+AUTH_PASSKEYS_RP_ID = "ledgers.sh"
+AUTH_PASSKEYS_ORIGINS = "https://auth.ledgers.sh"
+AUTH_PASSKEYS_OFFER_AFTER_SIGNIN = "true"
+AUTH_MAILER = "owlpost"
+MAIL_FROM = "Ledgers <no-reply@send.ledgers.sh>"
+AUTH_MAGIC_LINK_PUBLIC_BASE = "https://auth.ledgers.sh"
+AUTH_MAGIC_LINK_ALLOW_REGISTRATION = "true"
+AUTH_MAGIC_LINK_MAIL_FROM = "Ledgers <sign-in@send.ledgers.sh>"
+AUTH_PASSWORD_PUBLIC_BASE = "https://auth.ledgers.sh"
+AUTH_PASSWORD_MAIL_FROM = "Ledgers <sign-in@send.ledgers.sh>"
+AUTH_OIDC_REDIRECT_BASE = "https://auth.ledgers.sh"
+AUTH_META_REDIRECT_BASE = "https://auth.ledgers.sh"
+TURNSTILE_SITE_KEY = "LEDGERS_TURNSTILE_SITE_KEY"
+AUTH_TURNSTILE_HOSTNAME = "auth.ledgers.sh"
+# needs-human: same branding gaps as staging (logo, accent, support address,
+# privacy and terms URLs). Meta's app review needs the privacy URL.
