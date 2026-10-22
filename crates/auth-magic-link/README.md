@@ -223,6 +223,36 @@ rather than a caller's to respect:
 A retired link fails exactly as a made-up one does, so holding one teaches
 nothing.
 
+## The sign-up question, asked after the mailbox is proven
+
+When an application registers sign-up intents (see
+`cratefield-auth-core`'s README, "Sign-up intents"), a new address does not
+get its account at request time. The request still answers `202` with the
+same body, and still sends the link to a new address, exactly as for a known
+one. The account is made when the link is opened: the confirm page's `POST`
+shows "What brings you here?" for an address with no account, and spends the
+token and creates the account only once the answer is given (`intents_step`
+marks an answer, even an empty one). A refused answer, such as a key the
+client does not list or an exclusive intent combined with another, asks again
+and spends nothing.
+
+The question is therefore shown only to somebody holding the mailbox, so it
+cannot tell an unknown address from a known one. An application that answers
+for the person itself (`intents=` on `/authorize`) gets its account at request
+time, as before, and the answer is recorded when the link is opened. A
+deployment whose client asks nothing is unchanged.
+
+The account is inserted only if no account holds the address, in one
+statement, so two links for one address cannot both make it. When one link
+makes the account, the other unspent links for that address are spent with
+it. A link is refused as expired before the question is shown, and a link for
+a new account is refused once registration is switched off, even if it was
+sent while it was on. The link's payload names the client, the language the
+mail was written in, and the new address until the account exists. A pending link with no account is outside any person's
+export or erasure until it expires (fifteen minutes by default); it names no
+user, and it is spent or retired by the same single-use rules as any other
+link.
+
 ## What a caller can never learn
 
 - A known and an unknown address get the same `202` and the same body.

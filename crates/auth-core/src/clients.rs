@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::ModuleState;
+use crate::intents::{self, SignupIntent};
 use crate::secrets;
 use crate::store::{
     self, CLIENT_CONFIDENTIAL, CLIENT_PUBLIC, ClientRow, Redacted, STATUS_ACTIVE, STATUS_DISABLED,
@@ -157,6 +158,7 @@ async fn client_view(db: &dyn Database, row: &ClientRow) -> Result<Value, Proble
         "created_at": row.created_at,
         "redirect_uris": redirect_uris_of(db, &row.id).await?,
         "roles_claim": store::client_roles_claim(db, &row.id).await?,
+        "signup_intents": intents::client_list(db, &row.id).await?,
     }))
 }
 
@@ -169,6 +171,10 @@ struct CreateBody {
     /// Absent means no: a client gets roles only when it asks for them.
     #[serde(default)]
     roles_claim: bool,
+    /// The sign-up intents a new account chooses from (see [`crate::intents`]).
+    /// Absent or `null` means none.
+    #[serde(default)]
+    signup_intents: Option<Vec<SignupIntent>>,
 }
 
 async fn create(
@@ -180,6 +186,9 @@ async fn create(
     validate_kind(&body.kind).map_err(|p| p.instance(&scope.request_id))?;
     validate_redirect_uris(&body.redirect_uris, &body.kind)
         .map_err(|p| p.instance(&scope.request_id))?;
+    if let Some(list) = &body.signup_intents {
+        validate_intents(&scope, list)?;
+    }
 
     let (Some(db), Some(clock), Some(id_gen)) = (
         state.ctx.ports.db.clone(),
@@ -208,6 +217,9 @@ async fn create(
     .await?;
     store::replace_redirect_uris(&*db, &id, &body.redirect_uris).await?;
     store::set_client_roles_claim(&*db, &id, body.roles_claim).await?;
+    if let Some(list) = &body.signup_intents {
+        store::set_client_signup_intents_json(&*db, &id, Some(&intents::encode_list(list))).await?;
+    }
 
     audit("client.create", &id);
     let mut response = json!({
@@ -217,6 +229,7 @@ async fn create(
         "status": STATUS_ACTIVE,
         "redirect_uris": body.redirect_uris,
         "roles_claim": body.roles_claim,
+        "signup_intents": body.signup_intents,
     });
     if let Some(secret) = plaintext {
         response["client_secret"] = json!(secret);
@@ -236,12 +249,32 @@ async fn list(scope: Scope, State(state): State<Arc<ModuleState>>) -> Result<Res
     Ok(Json(Value::Array(views)).into_response())
 }
 
+/// Refuses a sign-up intent list the rules in [`crate::intents`] reject.
+fn validate_intents(scope: &Scope, list: &[SignupIntent]) -> Result<(), Problem> {
+    intents::validate_list(list).map_err(|err| bad_request(scope, err.0))
+}
+
+/// A field that may be absent, `null`, or a value: `None` when absent,
+/// `Some(None)` for `null` (clear it), `Some(Some(v))` for a value.
+#[allow(clippy::option_option)]
+fn present_or_null<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 struct PatchBody {
     name: Option<String>,
     status: Option<String>,
     redirect_uris: Option<Vec<String>>,
     roles_claim: Option<bool>,
+    /// Replaces the client's sign-up intents; `null` clears them.
+    #[serde(default, deserialize_with = "present_or_null")]
+    #[allow(clippy::option_option)]
+    signup_intents: Option<Option<Vec<SignupIntent>>>,
 }
 
 async fn patch_client(
@@ -254,11 +287,15 @@ async fn patch_client(
         && body.status.is_none()
         && body.redirect_uris.is_none()
         && body.roles_claim.is_none()
+        && body.signup_intents.is_none()
     {
         return Err(bad_request(
             &scope,
-            "nothing to change: name, status, redirect_uris or roles_claim",
+            "nothing to change: name, status, redirect_uris, roles_claim or signup_intents",
         ));
+    }
+    if let Some(Some(list)) = &body.signup_intents {
+        validate_intents(&scope, list)?;
     }
     if let Some(status) = &body.status
         && !matches!(status.as_str(), STATUS_ACTIVE | STATUS_DISABLED)
@@ -293,6 +330,10 @@ async fn patch_client(
     }
     if let Some(enabled) = body.roles_claim {
         store::set_client_roles_claim(&*db, &id, enabled).await?;
+    }
+    if let Some(list) = &body.signup_intents {
+        let json = list.as_deref().map(intents::encode_list);
+        store::set_client_signup_intents_json(&*db, &id, json.as_deref()).await?;
     }
 
     audit("client.patch", &id);

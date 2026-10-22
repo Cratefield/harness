@@ -50,6 +50,8 @@ const SUBJECT_TABLES: &[&str] = &[
     "recovery_codes",
     "security_notices",
     "terms_acceptances",
+    // Sign-up intents: the choices an account made, per client.
+    "user_client_intents",
     "step_up_transactions",
 ];
 
@@ -191,6 +193,18 @@ async fn seed(kit: &TestHarness, user: &str, email: &str) {
             "user_role_audit",
             "INSERT INTO user_role_audit (id, user_id, role, at) VALUES (?, ?, 'admin', ?)",
             vec![format!("role-{user}").into(), user.into(), at.into()],
+        ),
+        (
+            "clients",
+            "INSERT INTO clients (id, name, secret_hash, kind, status, created_at) \
+             VALUES (?, 'Intents app', 'unused', 'public', 'active', ?)",
+            vec![format!("intents-app-{user}").into(), at.into()],
+        ),
+        (
+            "user_client_intents",
+            "INSERT INTO user_client_intents (user_id, client_id, intents, updated_at) \
+             VALUES (?, ?, '[\"builder\"]', ?)",
+            vec![user.into(), format!("intents-app-{user}").into(), at.into()],
         ),
         (
             "step_up_transactions",

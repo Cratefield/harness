@@ -1740,7 +1740,11 @@ fn the_page_has_no_widget_when_no_captcha_or_no_site_key_is_configured() {
     pollster::block_on(async {
         // No Captcha port: the form is the plain page it always was.
         let plain = get_page(&kit(), START).await;
-        assert!(!plain.text().contains("cf-turnstile"), "{}", plain.text());
+        assert!(
+            !plain.text().contains("class=\"cf-turnstile\""),
+            "{}",
+            plain.text()
+        );
         assert!(!plain.text().contains("<script"), "{}", plain.text());
         // The harness adds its own `frame-ancestors` policy to `/v1`; the page
         // itself must not open Turnstile's origin.
@@ -1762,7 +1766,11 @@ fn the_page_has_no_widget_when_no_captcha_or_no_site_key_is_configured() {
         // must still never render an empty `data-sitekey`.
         let keyless = kit_captcha(cratefield_testing::FakeCaptcha::allow_all(), &[]);
         let page = get_page(&keyless, START).await;
-        assert!(!page.text().contains("cf-turnstile"), "{}", page.text());
+        assert!(
+            !page.text().contains("class=\"cf-turnstile\""),
+            "{}",
+            page.text()
+        );
     });
 }
 

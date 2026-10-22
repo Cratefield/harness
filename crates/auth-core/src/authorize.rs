@@ -44,6 +44,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::ModuleState;
 use crate::brand::Brand;
+use crate::intents;
 use crate::page::wants_html;
 use crate::redirect_uri::matches_any;
 use crate::secrets;
@@ -202,12 +203,28 @@ fn html(template: &impl Template) -> Response {
 #[template(path = "login_chooser.html")]
 struct LoginChooserTemplate {
     brand: Brand,
+    /// The link-shaped methods other than the email step, in the operator's
+    /// order. Shown under "Other ways to continue".
     methods: Vec<LoginMethod>,
     /// Whether to emit the passkey script at all. A page that offers no
     /// passkey carries no script.
     has_passkey: bool,
-    /// The pending `/authorize`, for the button to navigate back to.
+    /// Whether the email step is offered (the magic link is enabled here).
+    has_email: bool,
+    /// Whether this deployment creates accounts from an email. When it does
+    /// not, the page says the app is invite-only, for every address alike.
+    registration_open: bool,
+    /// The address `login_hint` named, when it is a valid one. Its presence
+    /// skips the email step: the method choice is shown straight away.
+    hint: Option<String>,
+    /// The pending `/authorize`, for the buttons to navigate back to.
     return_to: String,
+    /// The same request without `login_hint`, for "Use a different address".
+    return_to_without_hint: String,
+    /// The Turnstile widget for the email form, when the instance has a captcha.
+    turnstile_widget: Option<String>,
+    /// The Turnstile loader script, with the widget.
+    turnstile_script: Option<&'static str>,
 }
 
 #[derive(Template)]
@@ -422,6 +439,10 @@ struct AuthorizeQuery {
     /// into the chooser's return path by this module; a value that names no
     /// live transaction of this account and client does nothing.
     step_up: Option<String>,
+    /// The sign-up intents the application collected itself, comma-separated
+    /// (see [`crate::intents`]). Each must be on the client's list; given, the
+    /// hosted "What brings you here?" step is skipped.
+    intents: Option<String>,
 }
 
 /// The longest `nonce` accepted. Opaque to this service and echoed
@@ -435,6 +456,9 @@ const MAX_NONCE_BYTES: usize = 512;
 struct Prompt {
     none: bool,
     login: bool,
+    /// `intents`: ask the signed-in person what brings them here, again, and
+    /// record the answer (this module's extension; see [`crate::intents`]).
+    intents: bool,
 }
 
 /// Reads `prompt`. Any unknown value, or `none` alongside another value
@@ -449,6 +473,7 @@ fn parse_prompt(raw: Option<&str>) -> Result<Prompt, ()> {
         match *value {
             "none" => prompt.none = true,
             "login" => prompt.login = true,
+            "intents" => prompt.intents = true,
             "consent" | "select_account" => {}
             _ => return Err(()),
         }
@@ -1236,6 +1261,30 @@ async fn authorize(
         ));
     }
 
+    // `intents` (see `crate::intents`): the application's own answer to the
+    // "What brings you here?" question. Every key must be on the client's
+    // list; a bad one is an OAuth error to the registered URI, like any other
+    // bad parameter. Without a list, any `intents` is refused.
+    let requested_intents: Option<Vec<String>> = match query.intents.as_deref() {
+        None => None,
+        Some(raw) => {
+            let keys = intents::parse_param(raw);
+            let list = intents::client_list(&*db, &query.client_id)
+                .await
+                .map_err(|_| Problem::internal())?;
+            match list.map(|list| intents::check_selection(&list, &keys)) {
+                Some(Ok(chosen)) => Some(chosen),
+                _ => {
+                    return Ok(oauth_error_redirect(
+                        &query.redirect_uri,
+                        "invalid_request",
+                        query.state.as_deref(),
+                    ));
+                }
+            }
+        }
+    };
+
     // The session, read once: the SSO routing below and the code minting
     // further down both decide on it.
     let session = match sessions::cookie_value(&headers) {
@@ -1417,13 +1466,51 @@ async fn authorize(
 
     let chooser = |transaction: Option<&str>, cookie: Option<&str>| {
         let return_to = return_to(transaction);
-        let methods = enabled_login_methods(&*state.ctx.config, &return_to);
+        let return_to_without_hint = without_query_params(&return_to, &["login_hint"]);
+        let hint = query
+            .login_hint
+            .as_deref()
+            .map(cratefield_core::normalize_email)
+            .filter(|email| cratefield_core::is_valid(email));
+        let all = enabled_login_methods(&*state.ctx.config, &return_to);
+        let has_email = all.iter().any(|method| method.slug == "magic-link");
+        let has_passkey = all.iter().any(|method| method.is_passkey);
+        // The email step and the passkey are the Continue screen's own
+        // controls; what is left is offered under "Other ways to continue".
+        let methods = all
+            .into_iter()
+            .filter(|method| !method.is_passkey && method.slug != "magic-link")
+            .collect();
+        // The email step is a form, so when the instance has a captcha it
+        // carries the Turnstile widget, the same as the magic link's own form.
+        // Without the widget the form would post with no answer and be
+        // refused silently.
+        let brand = brand_of(&state);
+        let turnstile = crate::page::turnstile_site_key(state.ctx.as_ref())
+            .filter(|_| has_email)
+            .map(|key| crate::page::turnstile_widget(&key, "magic-link", brand.theme.scheme));
+        let csp = crate::page::chooser_turnstile_csp(
+            brand.theme.font_css_url.as_deref(),
+            brand.logo_url.as_deref(),
+        );
+        let has_widget = turnstile.is_some();
         let mut response = html(&LoginChooserTemplate {
-            brand: brand_of(&state),
-            has_passkey: methods.iter().any(|method| method.is_passkey),
+            brand,
+            has_passkey,
+            has_email,
+            registration_open: magic_link_registration_open(&*state.ctx.config),
+            hint,
             methods,
             return_to,
+            return_to_without_hint,
+            turnstile_script: turnstile
+                .is_some()
+                .then_some(cratefield_ui::render::TURNSTILE_SCRIPT),
+            turnstile_widget: turnstile,
         });
+        if has_widget {
+            crate::page::with_csp(&mut response, &csp);
+        }
         if let Some(cookie) = cookie
             && let Ok(value) = HeaderValue::from_str(&browser_cookie_header(cookie))
         {
@@ -1504,6 +1591,33 @@ async fn authorize(
         ));
     }
 
+    // "What brings you here?" on demand (prompt=intents, see `crate::intents`):
+    // a signed-in person is asked again and the answer is recorded. Skipped
+    // when the application supplied its own answer, when the client has no
+    // list, and under prompt=none, which shows nothing.
+    if prompt.intents
+        && !prompt.none
+        && requested_intents.is_none()
+        && let Some(list) = intents::client_list(&*db, &query.client_id)
+            .await
+            .map_err(|_| Problem::internal())?
+    {
+        let chosen_now = intents::chosen(&*db, &session.user_id, &query.client_id)
+            .await
+            .map_err(|_| Problem::internal())?
+            .unwrap_or_default();
+        let return_to_without_intents = without_prompt_value(&return_to(None), "intents");
+        let action = format!("{}/intents", module_base(&original_uri));
+        return Ok(intents::step_page(
+            &brand_of(&state),
+            &action,
+            &[("return_to", &return_to_without_intents)],
+            &list,
+            &intents::request_locale(&headers),
+            &chosen_now,
+        ));
+    }
+
     // A sign-in that has just happened may be sent through the composition's
     // post-sign-in step (the passkey offer) before its code is minted. Only
     // a real, fresh, non-step-up, page-wanting sign-in qualifies, so a long
@@ -1533,6 +1647,17 @@ async fn authorize(
         }
     }
 
+    // The application's own answer (`intents=`) is recorded for this account
+    // and client. It is the application's to make, and it grants nothing: the
+    // `roles` claim is read from the account's role, never from here.
+    // Only when the account has no answer for this client yet: the
+    // application's `intents=` never silently replaces what the person chose
+    // (`prompt=intents` is how they change it).
+    if let Some(chosen) = &requested_intents {
+        intents::record_if_unset(&*db, &*clock, &session.user_id, &query.client_id, chosen)
+            .await
+            .map_err(|_| Problem::internal())?;
+    }
     let openid = query.scope.as_deref().is_some_and(|scope| {
         scope
             .split_ascii_whitespace()
@@ -1599,6 +1724,110 @@ async fn authorize(
     )
         .into_response())
 }
+
+/// Whether the magic-link module registers new accounts from an email
+/// (`AUTH_MAGIC_LINK_ALLOW_REGISTRATION`). Read here so the page can say the
+/// app is invite-only; the module decides what actually happens, and unset
+/// means no, as it does there.
+fn magic_link_registration_open(cfg: &dyn Config) -> bool {
+    matches!(
+        ModuleConfig::new("auth-magic-link", cfg)
+            .get_opt("ALLOW_REGISTRATION")
+            .as_deref()
+            .map(str::trim),
+        Some("true" | "1")
+    )
+}
+
+/// The module's mount, from the request's own path: `/v1/auth-core` for
+/// `/v1/auth-core/authorize`. Forms and redirects are written against it, so
+/// they keep working wherever the module is mounted.
+fn module_base(uri: &Uri) -> String {
+    let path = uri.path();
+    path.strip_suffix("/authorize").unwrap_or(path).to_owned()
+}
+
+/// `path_and_query` with one value of the `prompt` parameter removed. A
+/// `prompt` left with nothing in it is dropped altogether. Used to hand the
+/// request back once the intents step is answered, so that the step is not
+/// asked again.
+fn without_prompt_value(path_and_query: &str, value: &str) -> String {
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, ""), |(path, query)| (path, query));
+    let pairs: Vec<String> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .filter_map(|pair| {
+            let Some((key, raw)) = pair.split_once('=') else {
+                return Some(pair.to_owned());
+            };
+            if key != "prompt" {
+                return Some(pair.to_owned());
+            }
+            let kept: Vec<&str> = raw
+                .split(['+', ' '])
+                .flat_map(|part| part.split("%20"))
+                .filter(|part| !part.is_empty() && *part != value)
+                .collect();
+            (!kept.is_empty()).then(|| format!("prompt={}", kept.join("+")))
+        })
+        .collect();
+    if pairs.is_empty() {
+        path.to_owned()
+    } else {
+        format!("{path}?{}", pairs.join("&"))
+    }
+}
+
+/// `GET /signup` and `GET /signin`: the two addresses an application's links
+/// were written against before there was one entry flow. Both now go to
+/// `/authorize`, the Continue screen, with every parameter they were given.
+async fn signup_redirect(OriginalUri(uri): OriginalUri) -> Response {
+    to_authorize(&uri)
+}
+
+async fn signin_redirect(OriginalUri(uri): OriginalUri) -> Response {
+    to_authorize(&uri)
+}
+
+fn to_authorize(uri: &Uri) -> Response {
+    // The module's mount is everything before the last segment (`signup` or
+    // `signin`), so the redirect lands on this module's own `/authorize`.
+    let base = uri.path().rsplit_once('/').map_or("", |(base, _)| base);
+    let target = format!(
+        "{base}/authorize{}",
+        uri.query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default()
+    );
+    (StatusCode::FOUND, [(header::LOCATION, target)]).into_response()
+}
+
+/// Whether a `return_to` names this module's `/authorize`: a path on this
+/// service, never an absolute or protocol-relative URL.
+///
+/// The same rules `magic-link`'s `safe_return_to` applies to its own
+/// `return_to`: trimmed, a bounded length, a path on this service, and no
+/// control characters. The caller redirects to the trimmed value.
+fn is_authorize_path(candidate: &str) -> bool {
+    // Control characters are refused in the value as sent, before any trim: a
+    // trailing newline must not be quietly cut and the rest accepted.
+    let value = candidate.trim();
+    candidate.len() <= MAX_RETURN_TO
+        && !candidate.chars().any(char::is_control)
+        && value.starts_with('/')
+        && !value.starts_with("//")
+        && !value.starts_with("/\\")
+        && value
+            .split('?')
+            .next()
+            .is_some_and(|path| path.ends_with("/authorize"))
+}
+
+/// The longest `return_to` the flow carries, the same bound the magic link
+/// applies.
+const MAX_RETURN_TO: usize = 4096;
 
 #[derive(Deserialize)]
 struct LogoutQuery {
@@ -1800,11 +2029,106 @@ fn confirm_action(path: &str) -> String {
 /// without a second copy of the route.
 pub(crate) const AUTHORIZE_ROUTE: &str = "/authorize";
 
+/// `POST /intents`: the signed-in person's answer to "What brings you here?"
+/// (`prompt=intents`). Same-origin only, like every form that acts. The
+/// request it returns to is re-validated the way `/authorize` validates it,
+/// so the form cannot send the browser anywhere the flow would not go.
+async fn intents_submit(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: String,
+) -> Result<Response, Problem> {
+    let brand = brand_of(&state);
+    if let Err(problem) = crate::csrf::require_same_origin(&headers, &uri) {
+        return Err(problem.instance(&scope.request_id));
+    }
+    let fields: Vec<(String, String)> = url::form_urlencoded::parse(body.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    let Some(return_to) = field("return_to")
+        .filter(|value| is_authorize_path(value))
+        .map(|value| value.trim().to_owned())
+    else {
+        return Ok(error_page(&scope, brand));
+    };
+    let query_part = return_to.split_once('?').map_or("", |(_, query)| query);
+    let params: Vec<(String, String)> = url::form_urlencoded::parse(query_part.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let param = |name: &str| {
+        params
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    let (Some(client_id), Some(redirect_uri)) = (param("client_id"), param("redirect_uri")) else {
+        return Ok(error_page(&scope, brand));
+    };
+    let (Some(db), Some(clock)) = (state.ctx.ports.db.clone(), state.ctx.ports.clock.clone())
+    else {
+        return Err(Problem::internal());
+    };
+    if validate_client_and_uri(&*db, &client_id, &redirect_uri)
+        .await
+        .is_err()
+    {
+        return Ok(error_page(&scope, brand));
+    }
+    let Some(cookie) = sessions::cookie_value(&headers) else {
+        return Ok(see_other(&return_to));
+    };
+    let live = match sessions::validate(&*db, &*clock, &cookie)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        Some(live) if !recovery_only(&*db, &live.id).await? => live,
+        _ => return Ok(see_other(&return_to)),
+    };
+    let Some(list) = intents::client_list(&*db, &client_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    else {
+        return Ok(error_page(&scope, brand));
+    };
+    let keys: Vec<String> = fields
+        .iter()
+        .filter(|(key, _)| key == "intents")
+        .map(|(_, value)| value.clone())
+        .collect();
+    let Ok(chosen) = intents::check_selection(&list, &keys) else {
+        return Ok(error_page(&scope, brand));
+    };
+    intents::record(&*db, &*clock, &live.user_id, &client_id, &chosen)
+        .await
+        .map_err(|_| Problem::internal())?;
+    Ok(see_other(&return_to))
+}
+
+/// A `303` back to a path this module already validated.
+fn see_other(location: &str) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, location.to_owned())],
+    )
+        .into_response()
+}
+
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
         .route(AUTHORIZE_ROUTE, get(authorize))
         .route("/logout", get(logout))
         .route("/logout/confirm", post(logout_confirm))
+        .route("/signup", get(signup_redirect))
+        .route("/signin", get(signin_redirect))
+        .route("/intents", post(intents_submit))
 }
 
 #[cfg(test)]
@@ -1829,7 +2153,13 @@ mod tests {
                 is_passkey: true,
             }],
             has_passkey: true,
+            has_email: false,
+            registration_open: false,
+            hint: None,
             return_to: hostile.to_owned(),
+            return_to_without_hint: hostile.to_owned(),
+            turnstile_widget: None,
+            turnstile_script: None,
         }
         .render()
         .expect("renders");
@@ -1949,7 +2279,8 @@ mod tests {
             parse_prompt(Some("login")),
             Ok(Prompt {
                 none: false,
-                login: true
+                login: true,
+                intents: false,
             })
         );
         assert_eq!(
@@ -1960,7 +2291,8 @@ mod tests {
             parse_prompt(Some("none")),
             Ok(Prompt {
                 none: true,
-                login: false
+                login: false,
+                intents: false,
             })
         );
         // `none` is never combined, and an unknown value is refused.

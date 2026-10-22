@@ -221,6 +221,23 @@ fn build(env: &Env, customize: impl FnOnce(AuthWorker) -> AuthWorker) -> Option<
     Some((harness, runtime_for(env, mailer, &hostname)))
 }
 
+/// The root-level addresses an app's links were written against before there
+/// was one entry flow. `/signup` and `/signin` are not routes of the harness
+/// (which mounts modules under `/v1/...`), so the Worker answers them itself:
+/// a redirect to the Continue screen, `/v1/auth-core/authorize`, with every
+/// query parameter kept. `None` for any other path.
+#[must_use]
+pub fn root_redirect_target(path: &str, query: Option<&str>) -> Option<String> {
+    let target = match path {
+        "/signup" | "/signin" => "/v1/auth-core/authorize",
+        _ => return None,
+    };
+    Some(match query {
+        Some(query) if !query.is_empty() => format!("{target}?{query}"),
+        _ => target.to_owned(),
+    })
+}
+
 /// Serves one request for a venture built from the deployment `Env`.
 ///
 /// A wrapper crate calls this from its own `#[event(fetch)]`, passing a
@@ -238,6 +255,14 @@ pub async fn serve_request(
     ctx: Context,
     customize: impl FnOnce(AuthWorker) -> AuthWorker,
 ) -> worker::Result<Response> {
+    if let Ok(url) = req.url()
+        && let Some(target) = root_redirect_target(url.path(), url.query())
+    {
+        let destination = url
+            .join(&target)
+            .map_err(|err| worker::Error::RustError(err.to_string()))?;
+        return Response::redirect(destination);
+    }
     let Some((harness, runtime)) = instance(&env, customize) else {
         return Err(worker::Error::RustError(
             "auth worker configuration invalid".to_owned(),
@@ -277,4 +302,28 @@ pub async fn fetch(req: Request, env: Env, ctx: Context) -> worker::Result<Respo
 #[worker::event(scheduled)]
 pub async fn scheduled(event: worker::ScheduledEvent, env: Env, ctx: worker::ScheduleContext) {
     serve_scheduled_request(event, env, ctx, |worker| worker).await;
+}
+
+#[cfg(test)]
+mod root_redirect_tests {
+    use super::root_redirect_target;
+
+    #[test]
+    fn signup_and_signin_go_to_the_continue_screen_with_the_query() {
+        assert_eq!(
+            root_redirect_target("/signup", Some("client_id=abc&response_type=code")).as_deref(),
+            Some("/v1/auth-core/authorize?client_id=abc&response_type=code")
+        );
+        assert_eq!(
+            root_redirect_target("/signin", None).as_deref(),
+            Some("/v1/auth-core/authorize")
+        );
+    }
+
+    #[test]
+    fn other_paths_are_not_redirected() {
+        assert_eq!(root_redirect_target("/signup/extra", None), None);
+        assert_eq!(root_redirect_target("/v1/auth-core/authorize", None), None);
+        assert_eq!(root_redirect_target("/", None), None);
+    }
 }

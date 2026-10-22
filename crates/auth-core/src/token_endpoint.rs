@@ -26,9 +26,9 @@
 
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use cratefield_core::{Clock, Database, Json, Problem, Scope, constant_time_eq, subject_hash};
 use serde::Deserialize;
@@ -247,6 +247,7 @@ async fn minted_response(
         "refresh_token": refresh,
     });
     if let IdToken::Issue { nonce } = id_token {
+        let intents = intents_claim(db, &user.id, client_id).await?;
         let id = mint_id_token(
             keys,
             clock,
@@ -259,12 +260,101 @@ async fn minted_response(
             roles.as_deref(),
             &session.id,
             acr,
+            intents.as_deref(),
         )
         .map_err(|err| {
             tracing::error!(error = %err, "id-token mint failed");
             Problem::internal()
         })?;
         body["id_token"] = json!(id);
+    }
+    Ok(Json(body).into_response())
+}
+
+/// The `intents` claim for one account and client (see [`crate::intents`]):
+/// `None` when the client registered no list, so the claim is absent. Otherwise
+/// the keys the account chose that the list still names, in the list's order,
+/// which is `[]` for an account that has not chosen. Intents are read here, not
+/// from the request, and never reach `roles`.
+async fn intents_claim(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+) -> Result<Option<Vec<String>>, Problem> {
+    let Some(list) = crate::intents::client_list(db, client_id).await? else {
+        return Ok(None);
+    };
+    let chosen = crate::intents::chosen(db, user_id, client_id)
+        .await?
+        .unwrap_or_default();
+    Ok(Some(
+        list.iter()
+            .filter(|intent| chosen.contains(&intent.key))
+            .map(|intent| intent.key.clone())
+            .collect(),
+    ))
+}
+
+/// `GET /userinfo` (OpenID Connect Core section 5.3): the claims about the
+/// person behind a live access token this service minted. A token that does
+/// not verify, names an unknown or ended session, or whose session's account
+/// is no longer active is refused with `401 invalid_token`, and nothing about
+/// the person is said.
+async fn userinfo(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Problem> {
+    let (Some(db), Some(clock)) = (state.ctx.ports.db.clone(), state.ctx.ports.clock.clone())
+    else {
+        return Err(Problem::internal().instance(&scope.request_id));
+    };
+    let keys = state
+        .tokens
+        .read()
+        .expect("signing cell uncontended")
+        .clone();
+    let Some(keys) = keys else {
+        return Err(Problem::new(&TOKENS_UNCONFIGURED).instance(&scope.request_id));
+    };
+    let refused = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer error=\"invalid_token\"")],
+            Json(json!({ "error": "invalid_token" })),
+        )
+            .into_response()
+    };
+    let Some(token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return Ok(refused());
+    };
+    let now = clock.now().unix_timestamp();
+    let Some(claims) = crate::tokens::verify_access_token(&keys, token, now) else {
+        return Ok(refused());
+    };
+    let (Some(sid), Some(aud)) = (
+        claims.get("sid").and_then(Value::as_str),
+        claims.get("aud").and_then(Value::as_str),
+    ) else {
+        return Ok(refused());
+    };
+    let Some((_session, user)) = live_session_and_user(&*db, &*clock, sid).await? else {
+        return Ok(refused());
+    };
+    if claims.get("sub").and_then(Value::as_str) != Some(user.id.as_str()) {
+        return Ok(refused());
+    }
+    let mut body = json!({ "sub": user.id });
+    if let Some(email) = user.primary_email.as_deref() {
+        body["email"] = json!(email);
+        body["email_verified"] = json!(user.primary_email_verified);
+    }
+    if let Some(intents) = intents_claim(&*db, &user.id, aud).await? {
+        body["intents"] = json!(intents);
     }
     Ok(Json(body).into_response())
 }
@@ -495,7 +585,9 @@ async fn refresh_grant(grant: &GrantContext<'_>, form: &TokenForm) -> Result<Res
 }
 
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
-    axum::Router::new().route("/token", post(token))
+    axum::Router::new()
+        .route("/token", post(token))
+        .route("/userinfo", get(userinfo))
 }
 
 #[cfg(test)]

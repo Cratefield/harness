@@ -878,7 +878,11 @@ fn the_form_carries_the_widget_only_when_a_site_key_is_configured() {
         );
 
         let plain = get_page(&kit(), START).await;
-        assert!(!plain.text().contains("cf-turnstile"), "{}", plain.text());
+        assert!(
+            !plain.text().contains("class=\"cf-turnstile\""),
+            "{}",
+            plain.text()
+        );
         assert!(
             !plain.text().contains("challenges.cloudflare"),
             "{}",

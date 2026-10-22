@@ -1286,13 +1286,14 @@ async fn discovery_advertises_prompt_values_and_the_claims_it_emits() {
 
     assert_eq!(
         doc["prompt_values_supported"],
-        json!(["none", "login", "consent", "select_account"])
+        json!(["none", "login", "consent", "select_account", "intents"])
     );
     let claims = doc["claims_supported"].as_array().expect("claims list");
     for claim in [
         "auth_time",
         "amr",
         "roles",
+        "intents",
         "email_verified",
         "nonce",
         "azp",

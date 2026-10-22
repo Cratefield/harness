@@ -316,11 +316,12 @@ impl SigningKeys {
             "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["ES256"],
-            "prompt_values_supported": ["none", "login", "consent", "select_account"],
+            "prompt_values_supported": ["none", "login", "consent", "select_account", "intents"],
+            "userinfo_endpoint": format!("{issuer}{MODULE_PREFIX}/userinfo", issuer = self.issuer),
             "claims_supported": [
                 "iss", "sub", "aud", "exp", "iat", "sid",
                 "email", "email_verified", "amr", "sso_connection",
-                "auth_time", "nonce", "roles", "azp", "sid"
+                "auth_time", "nonce", "roles", "intents", "azp", "sid"
             ],
             "scopes_supported": ["openid"],
         })
@@ -388,6 +389,10 @@ struct IdClaims<'a> {
     email_verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     roles: Option<&'a [String]>,
+    /// The sign-up intents the person chose for this client (issue: one
+    /// entry flow). Present only for a client that registered a list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intents: Option<&'a [String]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     acr: Option<&'a str>,
 }
@@ -513,6 +518,7 @@ pub fn mint_id_token(
     roles: Option<&[String]>,
     session_id: &str,
     acr: Option<&str>,
+    intents: Option<&[String]>,
 ) -> Result<String, TokenError> {
     let now = clock.now().replace_nanosecond(0).expect("in range");
     let claims = IdClaims {
@@ -529,9 +535,44 @@ pub fn mint_id_token(
         email: user_email.map(|(email, _)| email),
         email_verified: user_email.map(|(_, verified)| verified),
         roles,
+        intents,
         acr,
     };
     Ok(sign_jwt(keys, "JWT", &claims))
+}
+
+/// Verifies an access token this service minted: an ES256 `at+jwt` whose
+/// `kid` names one of the configured keys, whose signature checks against
+/// that key, whose `iss` is this issuer and whose `exp` is in the future.
+/// Returns its claims. `None` for anything else, with no reason given.
+#[must_use]
+pub fn verify_access_token(keys: &SigningKeys, token: &str, now: i64) -> Option<Value> {
+    use p256::ecdsa::signature::Verifier;
+    let mut parts = token.split('.');
+    let (header_b64, claims_b64, sig_b64) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let header: Value =
+        serde_json::from_slice(&Base64UrlUnpadded::decode_vec(header_b64).ok()?).ok()?;
+    if header.get("alg")? != "ES256" || header.get("typ")? != "at+jwt" {
+        return None;
+    }
+    let kid = header.get("kid")?.as_str()?;
+    let key = keys.keys.iter().find(|key| key.kid == kid)?;
+    let signature =
+        ecdsa::Signature::from_slice(&Base64UrlUnpadded::decode_vec(sig_b64).ok()?).ok()?;
+    let signing_input = format!("{header_b64}.{claims_b64}");
+    key.signing
+        .verifying_key()
+        .verify(signing_input.as_bytes(), &signature)
+        .ok()?;
+    let claims: Value =
+        serde_json::from_slice(&Base64UrlUnpadded::decode_vec(claims_b64).ok()?).ok()?;
+    if claims.get("iss")?.as_str()? != keys.issuer || claims.get("exp")?.as_i64()? <= now {
+        return None;
+    }
+    Some(claims)
 }
 
 /// 32 random bytes, base64url — the shape of every opaque token value

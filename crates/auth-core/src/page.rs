@@ -46,9 +46,12 @@ pub fn turnstile_site_key(ctx: &ModuleContext) -> Option<String> {
 #[must_use]
 pub fn turnstile_widget(site_key: &str, action: &str, scheme: &str) -> String {
     let theme = if scheme == "light" { "light" } else { "dark" };
+    // The widget sits in its own row (`.cf-captcha`), with the form's field
+    // spacing above and below, and `data-size="flexible"` so it takes the
+    // field's width instead of its fixed 300px.
     format!(
-        "<div class=\"cf-turnstile\" data-sitekey=\"{key}\" data-action=\"{action}\" \
-data-theme=\"{theme}\"></div>",
+        "<div class=\"cf-captcha\"><div class=\"cf-turnstile\" data-sitekey=\"{key}\" \
+data-action=\"{action}\" data-theme=\"{theme}\" data-size=\"flexible\"></div></div>",
         key = escape(site_key),
         action = escape(action),
     )
@@ -60,12 +63,51 @@ data-theme=\"{theme}\"></div>",
 /// theme is an inline stylesheet. `font_css_url` is the brand's font
 /// stylesheet, if any; its files come from Google's font host.
 #[must_use]
-pub fn turnstile_csp(font_css_url: Option<&str>) -> String {
+pub fn turnstile_csp(font_css_url: Option<&str>, logo_url: Option<&str>) -> String {
     let policy = cratefield_ui::content_security_policy(font_css_url, true, true);
-    match font_css_url {
+    let policy = match font_css_url {
         Some(_) => format!("{policy}; font-src 'self' https://fonts.gstatic.com"),
         None => policy,
+    };
+    with_logo(policy, logo_url)
+}
+
+/// Opens the brand logo's origin for images, and nothing else. The logo is a
+/// configured `https` image URL (`AUTH_BRAND_LOGO_URL`), so its origin is the
+/// one host the policy adds: never a wildcard, and no other directive grows.
+/// Without a logo the policy is returned as it was.
+fn with_logo(policy: String, logo_url: Option<&str>) -> String {
+    let origin = logo_url.and_then(|url| cratefield_core::origin_of(url).ok());
+    match origin {
+        Some(origin) => policy.replacen(
+            "img-src 'self' data:",
+            &format!("img-src 'self' data: {origin}"),
+            1,
+        ),
+        None => policy,
     }
+}
+
+/// The policy the chooser answers with when it carries the Turnstile widget.
+/// The chooser keeps its one inline script (the passkey button) and makes
+/// same-origin `fetch` calls, so unlike [`turnstile_csp`] it allows its own
+/// origin for script, connect and style alongside Turnstile's.
+#[must_use]
+pub fn chooser_turnstile_csp(font_css_url: Option<&str>, logo_url: Option<&str>) -> String {
+    let origin = cratefield_ui::render::TURNSTILE_ORIGIN;
+    let fonts = font_css_url
+        .and_then(|url| cratefield_core::origin_of(url).ok())
+        .map(|origin| format!(" {origin}"))
+        .unwrap_or_default();
+    with_logo(
+        format!(
+            "default-src 'none'; style-src 'self' 'unsafe-inline'{fonts}; \
+             script-src 'self' 'unsafe-inline' {origin}; connect-src 'self' {origin}; \
+             frame-src {origin}; img-src 'self' data:; form-action 'self'; base-uri 'none'; \
+             frame-ancestors 'none'"
+        ),
+        logo_url,
+    )
 }
 
 /// A boot-time refusal for a captcha configured without its site key.
@@ -276,7 +318,10 @@ impl HostedPage {
                 if self.turnstile {
                     with_csp(
                         &mut response,
-                        &turnstile_csp(brand.theme.font_css_url.as_deref()),
+                        &turnstile_csp(
+                            brand.theme.font_css_url.as_deref(),
+                            brand.logo_url.as_deref(),
+                        ),
                     );
                 }
                 with_page_headers(response)
@@ -304,7 +349,7 @@ pub fn with_page_headers(mut response: Response) -> Response {
 
 /// Sets `Content-Security-Policy` on a response, unless the policy is not a
 /// valid header value (which none this crate builds is).
-fn with_csp(response: &mut Response, policy: &str) {
+pub(crate) fn with_csp(response: &mut Response, policy: &str) {
     if let Ok(value) = HeaderValue::from_str(policy) {
         response
             .headers_mut()
@@ -486,7 +531,7 @@ mod tests {
             "{html}"
         );
         assert!(
-            html.contains("<div class=\"cf-turnstile\" data-sitekey=\"0x-key\" data-action=\"magic-link\" data-theme=\"dark\">"),
+            html.contains("<div class=\"cf-captcha\"><div class=\"cf-turnstile\" data-sitekey=\"0x-key\" data-action=\"magic-link\" data-theme=\"dark\" data-size=\"flexible\"></div></div>"),
             "{html}"
         );
     }
@@ -500,10 +545,29 @@ mod tests {
 
     #[test]
     fn a_font_stylesheet_also_opens_its_font_files() {
-        assert!(!turnstile_csp(None).contains("font-src"));
+        assert!(!turnstile_csp(None, None).contains("font-src"));
         assert!(
-            turnstile_csp(Some("https://fonts.googleapis.com/css2?family=X"))
+            turnstile_csp(Some("https://fonts.googleapis.com/css2?family=X"), None)
                 .contains("font-src 'self' https://fonts.gstatic.com")
+        );
+    }
+
+    #[test]
+    fn a_logo_opens_only_its_own_origin_for_images() {
+        let logo = Some("https://factory0.ventures/assets/icon-512.png");
+        let with = turnstile_csp(None, logo);
+        assert!(
+            with.contains("img-src 'self' data: https://factory0.ventures;"),
+            "{with}"
+        );
+        assert_eq!(with.matches("https://factory0.ventures").count(), 1);
+        let without = turnstile_csp(None, None);
+        assert!(without.contains("img-src 'self' data:;"), "{without}");
+        assert!(!without.contains("factory0"), "{without}");
+        let chooser = chooser_turnstile_csp(None, logo);
+        assert!(
+            chooser.contains("img-src 'self' data: https://factory0.ventures;"),
+            "{chooser}"
         );
     }
 
