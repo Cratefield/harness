@@ -7,31 +7,35 @@ pages, mail, cookies or tokens names Cratefield.
 | | Staging | Production |
 |---|---|---|
 | Origin / issuer | `https://auth-staging.ledgers.sh` | `https://auth.ledgers.sh` |
-| Passkey RP ID | `ledgers.sh` | `ledgers.sh` |
+| Passkey RP ID | `auth-staging.ledgers.sh` | `ledgers.sh` |
 | Passkey origin | `https://auth-staging.ledgers.sh` | `https://auth.ledgers.sh` |
 | D1 | `ledgers-auth-staging` (id `LEDGERS_AUTH_STAGING_D1_ID`, placeholder) | `ledgers-auth-production` (id `LEDGERS_AUTH_PROD_D1_ID`, placeholder) |
 | Rate limiter namespaces | `1801` | `1802` |
 | GitHub environment | `auth-ledgers-staging` | `auth-ledgers-production` |
-| Mail | Owlpost, from `send.ledgers.sh` | same |
+| Mail | Owlpost, from `send.ledgers.sh` (staging sends real mail; no dev fallback) | same |
 | Login methods | passkey (primary), magic link (recovery, first sign-in) | same |
 
 The Worker is the unmodified `crates/auth-worker`; everything specific to
 Ledgers is in [`wrangler.toml`](wrangler.toml).
 
-**Passkey RP ID.** The RP ID is `ledgers.sh`, the registrable domain, not
-the auth host. A passkey is bound to its RP ID for good, so this is chosen
-before any user enrols one. It lets the same passkey work on the auth host
-and on the app hosts (`app-staging.ledgers.sh`, `app.ledgers.sh`) if the app
-ever runs a WebAuthn ceremony on its own pages. Every passkey origin is the
-RP ID or a subdomain of it, as WebAuthn requires.
+**Passkey RP ID.** Production uses `ledgers.sh`, the registrable domain, so
+production passkeys work on the auth host and on the app hosts
+(`app.ledgers.sh`) if the app ever runs a WebAuthn ceremony on its own pages.
+Staging uses its own host, `auth-staging.ledgers.sh`, matching factory0 and
+yoginini, so staging passkeys never show up on production sign-in. A passkey
+is bound to its RP ID for good, so both are fixed before any user enrols one.
+Every passkey origin is the RP ID or a subdomain of it, as WebAuthn requires.
 
 **Status:** not provisioned. Both D1 ids are placeholders, so
 `deploy-auth.yml` skips this instance on every run. No D1, secrets, Owlpost
-domain, Turnstile site or custom domains exist yet. Ledgers has no logo,
-accent, support address, privacy or terms URL yet, so those brand variables
-are commented out (`needs-human` in `wrangler.toml`). Staging and production
-both allow registration by magic link (`AUTH_MAGIC_LINK_ALLOW_REGISTRATION`);
-the owner should confirm production should open sign-up this way.
+domain, Turnstile site or custom domains exist yet. Branding uses the
+Ledgers logo (`https://ledgers.sh/assets/icon-512.png`) and accent `#E9B44C`.
+Support address, privacy and terms URLs are not set yet (no pages exist), so
+they are commented out (`needs-human` in `wrangler.toml`). Staging sends real
+mail through Owlpost, so a first sign-in by magic link works there once
+`OWLPOST_API_KEY` is set. Both environments allow registration by magic link
+(`AUTH_MAGIC_LINK_ALLOW_REGISTRATION`); open sign-up is intended, since
+Ledgers gates the books by the owner role.
 
 ## Consumers
 
