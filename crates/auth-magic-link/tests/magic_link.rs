@@ -1628,15 +1628,19 @@ fn form_body(email: &str, turnstile_response: Option<&str>) -> String {
 }
 
 /// Each event as its `(name, value)` fields.
+#[cfg(not(target_arch = "wasm32"))]
 type Recorded = Vec<Vec<(String, String)>>;
 
 /// Records the structured fields of every event, so a test can assert what
 /// an operator would see in the log and nothing else.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Default)]
 struct Events(Arc<RwLock<Recorded>>);
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Visit<'a>(&'a mut Vec<(String, String)>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl tracing::field::Visit for Visit<'_> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         self.0.push((field.name().to_owned(), format!("{value:?}")));
@@ -1646,6 +1650,7 @@ impl tracing::field::Visit for Visit<'_> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl tracing::Subscriber for Events {
     fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
         true
@@ -1664,6 +1669,7 @@ impl tracing::Subscriber for Events {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Events {
     /// The refusals the captcha logged, as their `reason` values.
     fn refusals(&self) -> Vec<String> {
@@ -1779,6 +1785,10 @@ fn a_form_post_with_a_valid_widget_answer_sends_the_mail() {
     });
 }
 
+// Installs a tracing subscriber for the duration of the test, which the
+// dispatcher guard (cli-acceptance `wasm_dispatcher_guard`) forbids in
+// Worker-reachable code. Gated to native so the guard sees the gate.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_refused_or_missing_answer_is_answered_as_sent_and_logged_without_pii() {
     pollster::block_on(async {
