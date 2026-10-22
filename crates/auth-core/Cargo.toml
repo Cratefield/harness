@@ -15,6 +15,9 @@ workspace = true
 [dependencies]
 askama = { workspace = true }
 cratefield-core = { workspace = true }
+# The Turnstile origin, script URL and site-key config key, and the CSP
+# the captcha widget needs: one definition, shared with the UI crate.
+cratefield-ui = { workspace = true }
 # `AUTH_LOCALES`/`Accept-Language`/`ui_locales` parsing and BCP 47 matching
 # live in the i18n crate (issue #649). Pure Rust, wasm-safe, the same crate
 # the template registry's negotiation is built around.

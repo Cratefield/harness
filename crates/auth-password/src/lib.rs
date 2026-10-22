@@ -344,16 +344,21 @@ impl Module for Password {
     }
 
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
-        match resolve_settings(cfg) {
-            Ok(_) => Ok(()),
-            Err(problems) => {
-                let mut errors = ConfigError::default();
-                for problem in problems {
-                    errors.push(format!("auth-password: {problem}"));
-                }
-                Err(errors)
-            }
+        let mut problems = match resolve_settings(cfg) {
+            Ok(_) => Vec::new(),
+            Err(problems) => problems,
+        };
+        // A captcha with no widget refuses every sign-in silently; refuse
+        // the boot instead.
+        problems.extend(cratefield_auth_core::page::turnstile_config_problem(cfg));
+        if problems.is_empty() {
+            return Ok(());
         }
+        let mut errors = ConfigError::default();
+        for problem in problems {
+            errors.push(format!("auth-password: {problem}"));
+        }
+        Err(errors)
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
@@ -392,6 +397,23 @@ mod tests {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
         )
+    }
+
+    #[test]
+    fn a_captcha_without_a_site_key_refuses_the_boot() {
+        let module = Password::new();
+        let refused = module
+            .validate_config(&config(&[("TURNSTILE_SECRET", "secret")]))
+            .expect_err("a captcha with no widget must not boot");
+        assert!(format!("{refused:?}").contains("TURNSTILE_SITE_KEY"));
+        assert!(
+            module
+                .validate_config(&config(&[
+                    ("TURNSTILE_SECRET", "secret"),
+                    ("TURNSTILE_SITE_KEY", "0x-key"),
+                ]))
+                .is_ok()
+        );
     }
 
     #[test]

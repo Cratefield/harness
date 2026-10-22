@@ -262,6 +262,23 @@ fn validate_config_matches_the_from_config_contract() {
     assert!(validate_config(&with_required(&[])).is_ok());
 }
 
+/// A Turnstile secret makes the captcha port exist; without its site key the
+/// widget never renders and every captcha-guarded form refuses silently, so
+/// the boot is refused instead.
+#[test]
+fn a_captcha_without_a_site_key_refuses_the_boot() {
+    let refused = validate_config(&with_required(&[("TURNSTILE_SECRET", "secret")]))
+        .expect_err("a captcha with no site key must not boot");
+    assert!(format!("{refused:?}").contains("TURNSTILE_SITE_KEY"));
+    assert!(
+        validate_config(&with_required(&[
+            ("TURNSTILE_SECRET", "secret"),
+            ("TURNSTILE_SITE_KEY", "0x-key"),
+        ]))
+        .is_ok()
+    );
+}
+
 /// Issue #656: the CF08 provider server is off unless a deployment has been
 /// issued a shared secret, and its presence is the whole switch.
 ///

@@ -852,6 +852,42 @@ fn the_form_needs_no_script_and_asks_for_both_fields() {
 }
 
 #[test]
+fn the_form_carries_the_widget_only_when_a_site_key_is_configured() {
+    pollster::block_on(async {
+        // The harness's default captcha is on, so the site key alone decides.
+        let keyed = kit_with(
+            vec![("TURNSTILE_SITE_KEY".to_owned(), "0x-key".to_owned())],
+            i64::MAX,
+        );
+        let page = get_page(&keyed, START).await;
+        let html = page.text();
+        assert!(html.contains("class=\"cf-turnstile\""), "{html}");
+        assert!(html.contains("data-sitekey=\"0x-key\""), "{html}");
+        assert!(
+            html.contains("src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\""),
+            "{html}"
+        );
+        let csp = page
+            .headers
+            .get(header::CONTENT_SECURITY_POLICY)
+            .and_then(|value| value.to_str().ok())
+            .expect("a widget page carries its policy");
+        assert!(
+            csp.contains("script-src https://challenges.cloudflare.com;"),
+            "{csp}"
+        );
+
+        let plain = get_page(&kit(), START).await;
+        assert!(!plain.text().contains("cf-turnstile"), "{}", plain.text());
+        assert!(
+            !plain.text().contains("challenges.cloudflare"),
+            "{}",
+            plain.text()
+        );
+    });
+}
+
+#[test]
 fn the_form_signs_in_and_lands_where_it_was_told() {
     pollster::block_on(async {
         let kit = kit();

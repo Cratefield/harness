@@ -3,7 +3,8 @@
 <head>
 {% include "_head.html" %}
 <title>{{ title }} · {{ brand.name }}</title>
-</head>
+{% if let Some(script) = turnstile %}<script src="{{ script }}" async defer></script>
+{% endif %}</head>
 <body>
 {% include "_toasts.html" %}
 <main>

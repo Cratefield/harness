@@ -285,16 +285,21 @@ impl Module for MagicLink {
     }
 
     fn validate_config(&self, cfg: &dyn Config) -> Result<(), ConfigError> {
-        match resolve_settings(cfg) {
-            Ok(_) => Ok(()),
-            Err(problems) => {
-                let mut errors = ConfigError::default();
-                for problem in problems {
-                    errors.push(format!("auth-magic-link: {problem}"));
-                }
-                Err(errors)
-            }
+        let mut problems = match resolve_settings(cfg) {
+            Ok(_) => Vec::new(),
+            Err(problems) => problems,
+        };
+        // A captcha with no widget refuses every sign-in silently; refuse
+        // the boot instead.
+        problems.extend(cratefield_auth_core::page::turnstile_config_problem(cfg));
+        if problems.is_empty() {
+            return Ok(());
         }
+        let mut errors = ConfigError::default();
+        for problem in problems {
+            errors.push(format!("auth-magic-link: {problem}"));
+        }
+        Err(errors)
     }
 
     fn router(&self, ctx: ModuleContext) -> axum::Router {
@@ -333,6 +338,20 @@ mod tests {
             ("AUTH_MAGIC_LINK_PUBLIC_BASE", "https://auth.example.com"),
             ("AUTH_MAGIC_LINK_MAIL_FROM", "sign-in@example.com"),
         ]
+    }
+
+    #[test]
+    fn a_captcha_without_a_site_key_refuses_the_boot() {
+        let module = MagicLink::new();
+        let mut pairs = valid();
+        pairs.push(("TURNSTILE_SECRET", "secret"));
+        let refused = module
+            .validate_config(&config(&pairs))
+            .expect_err("a captcha with no widget must not boot");
+        assert!(format!("{refused:?}").contains("TURNSTILE_SITE_KEY"));
+
+        pairs.push(("TURNSTILE_SITE_KEY", "0x-key"));
+        assert!(module.validate_config(&config(&pairs)).is_ok());
     }
 
     #[test]

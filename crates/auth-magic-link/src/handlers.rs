@@ -4,7 +4,9 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64ct::{Base64UrlUnpadded, Encoding as _};
-use cratefield_auth_core::page::{HostedPage, Toast, escape as html_escape};
+use cratefield_auth_core::page::{
+    HostedPage, Toast, escape as html_escape, turnstile_site_key, turnstile_widget,
+};
 use cratefield_auth_core::{
     Brand, Hints, Redacted, STATUS_ACTIVE, SingleUseTokenRow, TOKEN_MAGIC_LINK, UserRow,
     consume_single_use_token, cookie_value as session_cookie_value, insert_single_use_token,
@@ -176,20 +178,46 @@ async fn limit_pause(
     None
 }
 
+/// Whether the captcha lets this request through. A refusal is answered
+/// exactly like a sent mail (see `decide`), so the only place it shows is
+/// the log: one structured line per refusal, carrying the reason and never
+/// the token, the address or the caller's address. An operator watching for
+/// `captcha.refused` sees a widget that is not rendering or a bot wave,
+/// instead of a sign-in that silently never arrives.
 async fn captcha_ok(state: &ModuleState, token: Option<&str>, headers: &HeaderMap) -> bool {
     let Some(captcha) = state.ctx.ports.captcha.as_deref() else {
         return true;
     };
+    let answer = token.unwrap_or_default();
     let ip = cratefield_core::client_ip(headers);
-    match captcha
-        .verify(token.unwrap_or_default(), ip.as_deref())
-        .await
-    {
-        Ok(verdict) => verdict.ok,
+    match captcha.verify(answer, ip.as_deref()).await {
+        Ok(verdict) if verdict.ok => true,
+        Ok(_) => {
+            // No answer at all is the page that rendered no widget, or a
+            // browser that never solved it; anything else is a wrong answer.
+            let reason = if answer.is_empty() {
+                "missing_token"
+            } else {
+                "rejected"
+            };
+            tracing::warn!(
+                module = "auth-magic-link",
+                event = "captcha.refused",
+                reason,
+                "a sign-in captcha was not passed; answering as if sent"
+            );
+            false
+        }
         Err(err) => {
             // Fail closed: an outage at the captcha provider must not turn
             // this into an open mail relay.
-            tracing::warn!(error = %err, "the captcha could not be verified");
+            tracing::warn!(
+                error = %err,
+                module = "auth-magic-link",
+                event = "captcha.refused",
+                reason = "unverifiable",
+                "the captcha could not be verified; answering as if sent"
+            );
             false
         }
     }
@@ -218,10 +246,15 @@ struct StartForm {
     /// page and the JSON route resolve identically (issue #649).
     #[serde(default)]
     locale: Option<String>,
+    /// The answer the Turnstile widget adds to the form. Only present when
+    /// the page rendered a widget.
+    #[serde(default, rename = "cf-turnstile-response")]
+    turnstile_response: Option<String>,
 }
 
 /// `GET /start?return_to=/path` — the form.
 async fn start(State(state): State<Arc<ModuleState>>, Query(query): Query<StartQuery>) -> Response {
+    let site_key = turnstile_site_key(state.ctx.as_ref());
     form_page(
         &brand_of(&state),
         &FormState {
@@ -229,6 +262,7 @@ async fn start(State(state): State<Arc<ModuleState>>, Query(query): Query<StartQ
             locale: query.locale.as_deref(),
             email: "",
             problem: None,
+            site_key: site_key.as_deref(),
         },
     )
 }
@@ -249,6 +283,7 @@ async fn start_submit(
 ) -> Response {
     let brand = brand_of(&state);
     let return_to = safe_return_to(form.return_to.as_deref());
+    let site_key = turnstile_site_key(state.ctx.as_ref());
     let again = |problem: FormProblem| {
         form_page(
             &brand,
@@ -257,6 +292,7 @@ async fn start_submit(
                 locale: form.locale.as_deref(),
                 email: &form.email,
                 problem: Some(problem),
+                site_key: site_key.as_deref(),
             },
         )
     };
@@ -277,7 +313,7 @@ async fn start_submit(
         &form.email,
         return_to.as_deref(),
         form.locale.as_deref(),
-        None,
+        form.turnstile_response.as_deref(),
     )
     .await
     {
@@ -347,6 +383,8 @@ struct FormState<'a> {
     /// What was typed, put back in the box so a typo is fixed, not retyped.
     email: &'a str,
     problem: Option<FormProblem>,
+    /// The Turnstile site key, when the page must carry the widget.
+    site_key: Option<&'a str>,
 }
 
 /// The form itself, with any problem shown inline under the field (and,
@@ -389,6 +427,11 @@ fn form_page(brand: &Brand, state: &FormState<'_>) -> Response {
     // `novalidate`: the browser's own bubble would replace the message
     // below with one in another voice; the server says it instead, with
     // or without script.
+    // The widget sits inside the form so its answer posts with the address.
+    // Its script and CSP come from `HostedPage::turnstile`, below.
+    let widget = state.site_key.map_or_else(String::new, |key| {
+        turnstile_widget(key, "magic-link", brand.theme.scheme)
+    });
     let body = format!(
         "<h1>Sign in with email</h1>\
 <p class=\"sub\">We will email you a link that signs you in.</p>\
@@ -397,6 +440,7 @@ fn form_page(brand: &Brand, state: &FormState<'_>) -> Response {
 <input class=\"cf-input\" id=\"email\" name=\"email\" type=\"email\" autocomplete=\"email\" \
 inputmode=\"email\" required autofocus value=\"{value}\" aria-describedby=\"email-error\"{aria_invalid}>\
 <p class=\"cf-field-error\" id=\"email-error\" role=\"alert\" aria-live=\"assertive\">{field_error}</p>\
+{widget}\
 <button class=\"cf-primary\" type=\"submit\">Email me a link</button></form>{back}",
         value = html_escape(state.email.trim()),
         aria_invalid = if invalid {
@@ -407,6 +451,9 @@ inputmode=\"email\" required autofocus value=\"{value}\" aria-describedby=\"emai
         field_error = html_escape(&field_error),
     );
     let mut page = HostedPage::new("Sign in with email").body(body);
+    if state.site_key.is_some() {
+        page = page.turnstile();
+    }
     match state.problem {
         Some(FormProblem::RateLimited(wait)) => {
             page = page
