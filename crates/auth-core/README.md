@@ -21,7 +21,7 @@ access and erasure walk.
 | `GET /sessions`, `DELETE /sessions/{id}` | List and end sessions |
 | `POST /token` | Access tokens, an ID token on the code grant, refresh tokens, reuse detection |
 | `GET /jwks.json`, `GET /openid-configuration` | The JWKS and discovery document |
-| `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client, and set its `roles_claim` (#912) |
+| `POST /admin/clients`, `GET /admin/clients`, `PATCH /admin/clients/{id}` | Register, list, rename or switch a client, set its `roles_claim` (#912) and its `signup_intents` |
 | `POST /admin/clients/{id}/rotate-secret` | Rotate a confidential client's secret, with an overlap window |
 | `POST /admin/users/import`, `GET /admin/users/by-external-id` | `fz auth import`'s server half |
 | `POST /admin/users/{sub}/disable`, `POST /admin/users/{sub}/enable` | Switch an account off and back on (#854) |
@@ -31,6 +31,9 @@ access and erasure walk.
 | `POST /email/change` | `{ new_email, current_password? }`, signed in. Always `202`, always the same body |
 | `GET /email/confirm?token=…` | The page an email-change link opens. Never reads or spends the token |
 | `POST /email/confirm` | `{ token }` as JSON, or form-encoded from the page's button. Sets `primary_email`, verified. `200`, or one refusal |
+| `GET /signup`, `GET /signin` | Redirect to `/authorize`, the Continue screen, keeping every query parameter (the two addresses apps were written against before one entry flow) |
+| `POST /intents` | The signed-in answer to "What brings you here?" (`prompt=intents`). Same-origin only, and re-validates the request it returns to |
+| `GET /userinfo` | OpenID Connect userinfo for a live access token this service minted: `sub`, `email`, `email_verified`, and `intents` for a client that registered a list |
 
 Both `/email/*` routes refuse a cross-site request first
 (`403 auth/cross-site-request`, #439): moving the address is what every
@@ -69,6 +72,62 @@ account with no address has no `email` or `email_verified` claim. Identify the
 account by `sub` everywhere, and treat `email` as optional. A passkey-only account
 steps up and changes its account on a passkey ceremony alone, exactly as an
 account with an address does.
+
+## One entry flow: the Continue screen and sign-up intents
+
+There is one sign-in screen, the chooser `GET /authorize` renders when nobody
+is signed in. It is titled **Continue**, and a person never chooses between
+signing up and signing in: an email step (a link to the address, which is
+also how a new account is verified), a "Continue with a passkey" button when
+passkeys are on (offered by autofill too, through conditional UI when the
+browser supports it), and the other enabled methods under "Other ways to
+continue". Pass `login_hint` and the address is filled in and the method
+choice is shown straight away.
+
+Whether an address is new is decided after the person proves the mailbox, so
+the screen never reveals whether an address has an account. With registration
+off (`AUTH_MAGIC_LINK_ALLOW_REGISTRATION` unset or false), the page says
+"This app is invite-only" for every address alike, and the answer to the
+email step is the same `202` whatever the address.
+
+`GET /signup` and `GET /signin` redirect to `/authorize` with the same query, so
+links written against the old two screens keep working.
+
+**Sign-up intents** are what brings a new account to an application (a role
+of interest, a kind of user). They are not roles.
+
+- The client registers them: `signup_intents` on `POST /admin/clients` and
+  `PATCH /admin/clients/{id}` (send `null` to clear the list). An intent is
+  `{"key", "label": {locale: text}, "description"?: {locale: text}, "multi"?: bool}`.
+  The key matches `[a-z][a-z0-9_]{0,31}`, is unique, `label` carries `en`, and
+  there are at most twelve. `multi` defaults to `true`; `false` makes the
+  intent exclusive, so picking it with another is refused. A bad list is `400`.
+- For a new account, after the mailbox is proven and before the account exists,
+  the magic-link confirm page asks "What brings you here?" with one checkbox
+  per intent. The answer is stored per (account, client) in
+  `user_client_intents`. A client without a list is never asked.
+- The application can answer itself with `intents=k1,k2` on `/authorize`. Each
+  key must be on the client's list, or the request is refused with
+  `invalid_request` to the registered URI. The step is then skipped.
+- A signed-in person can be asked again with `prompt=intents`. The hosted step
+  posts to `POST /intents`, which records the answer and returns to the request
+  without the `intents` prompt.
+- The chosen keys reach the ID token as an `intents` array (in the list's
+  order, `[]` when none was chosen), and `GET /userinfo` returns the same. The
+  claim is absent for a client with no list. Discovery lists `intents` as a
+  prompt value and a claim.
+
+**An intent never grants anything.** `roles` is still written only by an
+operator, through `POST /admin/users/{sub}/role` (issue #912), and the token
+reads the role from the account, never from a request or from an intent. A
+client that asks for `roles_claim` gets the account's role; it does not get
+the intents as roles. Authorize on `roles` (or on the account), and treat
+`intents` as the person's stated purpose: useful for onboarding, not for
+access control.
+
+Passkey-first sign-up (`/signup/options`, below) creates an account without an
+address and does not ask the question; an application that needs the answer
+for such an account asks it with `prompt=intents`.
 
 ## Step-up re-authentication and roles (#912)
 

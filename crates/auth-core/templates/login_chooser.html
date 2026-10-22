@@ -2,27 +2,51 @@
 <html lang="en">
 <head>
 {% include "_head.html" %}
-<title>Sign in · {{ brand.name }}</title>
+<title>Continue · {{ brand.name }}</title>
 </head>
 <body>
 <div class="cf-toasts" id="cf-toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
 <main>
   {% include "_brand_header.html" %}
-  <h1>Sign in</h1>
-  <p class="sub">Continue to {{ brand.name }}.</p>
-  {% if methods.is_empty() %}
-  <p class="none">No login methods are enabled here yet. The sign-in
-  options appear as each method is switched on.</p>
-  {% else %}
+  <h1>Continue</h1>
+  <p class="sub">Sign in, or create an account, to continue to {{ brand.name }}. You do not need to choose.</p>
+
+  {% if has_email %}
+  <form method="post" action="/v1/auth-magic-link/start" class="cf-form" id="cf-continue" novalidate>
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    {% if let Some(address) = hint %}
+    <input type="hidden" name="email" id="cf-email-fixed" value="{{ address }}">
+    <p class="cf-hint-line">Continuing as <strong>{{ address }}</strong>. <a class="cf-back" href="{{ return_to_without_hint }}">Use a different address</a></p>
+    {% else %}
+    <label class="cf-label" for="cf-email">Email address</label>
+    <input class="cf-input" id="cf-email" name="email" type="email" autocomplete="username webauthn" inputmode="email" required aria-describedby="cf-email-help">
+    <p class="sub" id="cf-email-help">Passkeys saved on this device are offered here too.</p>
+    {% endif %}
+    {% if has_passkey %}
+    <button class="cf-primary" type="button" id="cf-passkey" data-method="passkey" data-return-to="{{ return_to }}" hidden>Continue with a passkey</button>
+    {% endif %}
+    <button class="cf-secondary" type="submit">Email me a link</button>
+    {% if !registration_open %}
+    <p class="cf-notice">This app is invite-only. Use the address your invitation was sent to.</p>
+    {% endif %}
+  </form>
+  {% else if has_passkey %}
+  <form class="cf-form" id="cf-continue">
+    <input type="hidden" id="cf-email-fixed" value="">
+    <button class="cf-primary" type="button" id="cf-passkey" data-method="passkey" data-return-to="{{ return_to }}" hidden>Continue with a passkey</button>
+  </form>
+  {% endif %}
+
+  {% if !methods.is_empty() %}
+  <h2 class="cf-section-title">Other ways to continue</h2>
   <ul class="methods">
     {% for method in methods %}
-    {% if method.is_passkey %}
-    <li><button class="method" type="button" id="cf-passkey" data-method="{{ method.slug }}" data-return-to="{{ return_to }}" hidden>{{ method.label }}</button></li>
-    {% else %}
     <li><a class="method" data-method="{{ method.slug }}" href="{{ method.href }}">{{ method.label }}</a></li>
-    {% endif %}
     {% endfor %}
   </ul>
+  {% else if !has_email && !has_passkey %}
+  <p class="none">No login methods are enabled here yet. The sign-in
+  options appear as each method is switched on.</p>
   {% endif %}
   {% include "_brand_footer.html" %}
 </main>
@@ -37,6 +61,11 @@
 //
 // The button starts hidden and is revealed only once the browser proves
 // it has WebAuthn: a button that cannot work should not be offered.
+//
+// Conditional UI: when the browser can offer a saved passkey in the
+// address field's autofill, the same ceremony starts quietly on load, so
+// a returning person picks their passkey from the field and never presses
+// the button. The field carries `autocomplete="username webauthn"` for it.
 (function () {
   "use strict";
   var button = document.getElementById("cf-passkey");
@@ -49,6 +78,13 @@
   // value spliced into JavaScript would be an injection: the template's
   // HTML escaping covers an attribute, and nothing covers a script body.
   var RETURN_TO = button.getAttribute("data-return-to") || "/";
+
+  // The address typed into the form (or the one login_hint named). Empty
+  // means discoverable credentials: the authenticator offers whatever it holds.
+  function typedEmail() {
+    var field = document.getElementById("cf-email") || document.getElementById("cf-email-fixed");
+    return field ? field.value.trim() : "";
+  }
 
   function fromBase64Url(value) {
     var padded = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -123,7 +159,7 @@
     close.type = "button";
     close.className = "cf-toast-close";
     close.setAttribute("aria-label", "Dismiss this notice");
-    close.textContent = "\u00d7";
+    close.textContent = "×";
     close.addEventListener("click", function () { toast.remove(); });
     toast.appendChild(heading);
     toast.appendChild(body);
@@ -131,19 +167,20 @@
     toasts.insertBefore(toast, toasts.firstChild);
   }
 
-  button.addEventListener("click", function () {
-    button.disabled = true;
-    // No email: the authenticator offers whatever discoverable credential
-    // it holds, which is the passwordless path.
-    post("/v1/auth-passkeys/login/options", {})
+  // One ceremony, shared by the button and conditional UI. Resolves when the
+  // session is set, rejects with the reason otherwise.
+  function ceremony(mediation, signal) {
+    var email = typedEmail();
+    return post("/v1/auth-passkeys/login/options", email ? { email: email } : {})
       .then(function (response) {
         if (!response.ok) throw new Error("options");
         return response.json();
       })
       .then(function (options) {
-        return navigator.credentials.get({
-          publicKey: toRequestOptions(options.publicKey || options)
-        });
+        var request = { publicKey: toRequestOptions(options.publicKey || options) };
+        if (mediation) request.mediation = mediation;
+        if (signal) request.signal = signal;
+        return navigator.credentials.get(request);
       })
       .then(function (credential) {
         if (!credential) throw new Error("cancelled");
@@ -154,16 +191,38 @@
         // The session cookie is set by the response above; this is the
         // only navigation, and it goes back to the pending /authorize.
         window.location.assign(RETURN_TO);
-      })
-      .catch(function (reason) {
-        button.disabled = false;
-        // Deliberately one message. The server answers every refusal
-        // identically so a caller cannot tell "no such credential" from
-        // "bad signature", and saying more here would undo that.
-        if (reason && reason.name === "NotAllowedError") return;
-        notify("Passkey sign-in failed", "That did not work. Try again, or use another method.");
       });
+  }
+
+  var conditional = null;
+  function startConditional() {
+    // Only without a typed address: conditional UI lists what this browser
+    // holds, and a named address already narrows the ceremony by itself.
+    if (typedEmail() || !PublicKeyCredential.isConditionalMediationAvailable) return;
+    PublicKeyCredential.isConditionalMediationAvailable().then(function (available) {
+      if (!available) return;
+      conditional = new AbortController();
+      ceremony("conditional", conditional.signal).catch(function () {
+        // A conditional ceremony that fails, or is abandoned when the person
+        // uses another control, says nothing: the button and the form remain.
+      });
+    });
+  }
+
+  button.addEventListener("click", function () {
+    if (conditional) conditional.abort();
+    button.disabled = true;
+    ceremony(undefined, undefined).catch(function (reason) {
+      button.disabled = false;
+      // Deliberately one message. The server answers every refusal
+      // identically so a caller cannot tell "no such credential" from
+      // "bad signature", and saying more here would undo that.
+      if (reason && reason.name === "NotAllowedError") return;
+      notify("Passkey sign-in failed", "That did not work. Try again, or use another method.");
+    });
   });
+
+  startConditional();
 })();
 </script>
 {% endif %}

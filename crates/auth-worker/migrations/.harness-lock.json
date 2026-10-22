@@ -71,6 +71,10 @@
     "file": "0021_auth-core_0018_recovery_lookup.sql",
     "sha256": "8535b855e7707ef31599fff5dba9e9b2ffcc43d7f74a5e59ec180d5a32ed8336"
   },
+  "auth-core/0019": {
+    "file": "0023_auth-core_0019_signup_intents.sql",
+    "sha256": "8a858361ff2edcb30c351ead398c8e1ae1e9edc0bca22f989fac0458e3a0a81b"
+  },
   "auth-magic-link/0001": {
     "file": "0012_auth-magic-link_0001_send_cooldown.sql",
     "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"

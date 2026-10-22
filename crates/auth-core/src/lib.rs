@@ -60,6 +60,7 @@ pub mod federated;
 // routes that move a system of record's users in, preserving the verifier
 // and the verified address.
 mod import;
+pub mod intents;
 pub mod linking;
 mod locale;
 /// The hosted page shell every auth module renders into (issue #840):
@@ -362,6 +363,15 @@ const MIGRATION_RECOVERY_LOOKUP: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0018_recovery_lookup.sql"),
 );
 
+/// The sign-up intents of one client (a list the client registers and the
+/// account chooses from) and the choice a person made per client. Portable
+/// DDL, so the Postgres set reuses this file (ADR 0004).
+const MIGRATION_SIGNUP_INTENTS: SqlMigration = SqlMigration::new(
+    "0019",
+    "signup_intents",
+    include_str!("../migrations/sqlite/0019_signup_intents.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -516,6 +526,8 @@ impl Module for AuthCore {
             "recovery_codes",
             "security_notices",
             "terms_acceptances",
+            // Sign-up intents (one entry flow): the choice per account and client.
+            "user_client_intents",
         ]
     }
 
@@ -673,6 +685,16 @@ impl Module for AuthCore {
                 subject_via: None,
             },
             PersonalDataSet {
+                table: "user_client_intents",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The sign-up intents you chose for each application that asked \
+                              for them, and when you last changed them.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
                 table: "step_up_transactions",
                 subject: "user_id",
                 kind: DataKind::Identifier,
@@ -748,7 +770,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 18] = [
+        const MIGRATIONS: [SqlMigration; 19] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -767,6 +789,7 @@ impl Module for AuthCore {
             MIGRATION_STEP_UP_ACR_IN_CODES,
             MIGRATION_PASSKEY_FIRST_SIGNUP,
             MIGRATION_RECOVERY_LOOKUP,
+            MIGRATION_SIGNUP_INTENTS,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -777,7 +800,7 @@ impl Module for AuthCore {
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 18] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 19] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -796,6 +819,7 @@ impl Module for AuthCore {
             MIGRATION_STEP_UP_ACR_IN_CODES,
             MIGRATION_PASSKEY_FIRST_SIGNUP,
             MIGRATION_RECOVERY_LOOKUP,
+            MIGRATION_SIGNUP_INTENTS,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -1008,6 +1032,8 @@ mod tests {
                 "recovery_codes",
                 "security_notices",
                 "terms_acceptances",
+                // Sign-up intents: the choices an account made per client.
+                "user_client_intents",
             ]
         );
         assert!(!module.public_writes());
@@ -1073,7 +1099,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 18);
+        assert_eq!(migrations.sqlite.len(), 19);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -1110,10 +1136,12 @@ mod tests {
         assert_eq!(migrations.sqlite[16].name, "passkey_first_signup");
         assert_eq!(migrations.sqlite[17].id, "0018");
         assert_eq!(migrations.sqlite[17].name, "recovery_lookup");
+        assert_eq!(migrations.sqlite[18].id, "0019");
+        assert_eq!(migrations.sqlite[18].name, "signup_intents");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 18);
+        assert_eq!(migrations.postgres.len(), 19);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);

@@ -97,16 +97,30 @@ Running on another auth service today? [MIGRATING.md](MIGRATING.md) walks a
 Supabase export through `fz auth import`, keeping each user's password and
 verified email.
 
-## The login chooser
+## One entry flow: the Continue screen
 
-`/v1/auth-core/authorize` renders a sign-in page whenever there is no session.
-Which buttons it offers is configuration, not discovery:
+Every instance has one entry screen, titled **Continue**, for people who are
+not signed in. Nobody chooses between "sign up" and "sign in": an email step
+creates the account when the address is new (and only when the instance allows
+registration; otherwise the page says the app is invite-only, for every
+address alike) and signs in when it is known. A passkey, when enabled, is the
+primary control and is offered by the browser's autofill too. `/signup` and
+`/signin` redirect to the same screen, so older links keep working.
+
+An application can also ask what brings a new account to it. Those answers
+are **sign-up intents**: a list the client registers, chosen once, carried in
+the ID token and at userinfo as an `intents` claim. They never grant a role:
+`roles` stays operator-granted (see [the auth-core README](../../crates/auth-core/README.md#one-entry-flow-the-continue-screen-and-sign-up-intents)).
+
+The screen's buttons are still configuration, not discovery:
 
 ```
-AUTH_CORE_LOGIN_METHODS=passkey,google,apple,meta
+AUTH_CORE_LOGIN_METHODS=passkey,magic-link,google,apple,meta
 ```
 
-Order is display order. An unknown slug fails `validate_config`, which today
+`passkey` and `magic-link` are the Continue screen's own controls; the
+providers (and `password`) are listed under "Other ways to continue". Order is
+display order. An unknown slug fails `validate_config`, which today
 means `cargo test` catches it: nothing on the production boot path calls that
 check, so at runtime an unknown slug is silently dropped and simply renders no
 button. Setting a provider's credentials does **not** by

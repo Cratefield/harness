@@ -95,6 +95,90 @@ pub(crate) fn safe_return_to(candidate: Option<&str>) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// Whether a new address gets its account only when its link is opened: a
+/// registration-open deployment, an address with no account, and an application
+/// that asks its sign-up question and was not given the answer.
+async fn defers_account(
+    db: &dyn cratefield_core::Database,
+    scope: &Scope,
+    user: Option<&UserRow>,
+    allow_registration: bool,
+    link: &LinkContext,
+) -> Result<bool, Problem> {
+    match (user, allow_registration, link) {
+        (
+            None,
+            true,
+            LinkContext {
+                client_id: Some(client),
+                intents: None,
+            },
+        ) => Ok(cratefield_auth_core::intents::client_list(db, client)
+            .await
+            .map_err(|err| {
+                tracing::error!(error = %err, "could not read a client's sign-up questions");
+                Problem::internal().instance(&scope.request_id)
+            })?
+            .is_some()),
+        _ => Ok(false),
+    }
+}
+
+/// What a sign-in request's `return_to` says about the application it is for:
+/// the client, and the sign-up intents the application already collected
+/// (`intents=` on `/authorize`). Read from the path the request carries, and
+/// only ever used to decide what to store or ask; the answers are checked
+/// against the client's list again when the link is opened.
+#[derive(Debug, Default)]
+pub(crate) struct LinkContext {
+    pub(crate) client_id: Option<String>,
+    pub(crate) intents: Option<Vec<String>>,
+}
+
+impl LinkContext {
+    fn from_return_to(return_to: Option<&str>) -> Self {
+        let Some(return_to) = return_to else {
+            return Self::default();
+        };
+        let query = return_to.split_once('?').map_or("", |(_, query)| query);
+        let mut link = Self::default();
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            match key.as_ref() {
+                "client_id" => link.client_id = Some(value.into_owned()),
+                "intents" => {
+                    link.intents = Some(cratefield_auth_core::intents::parse_param(&value));
+                }
+                _ => {}
+            }
+        }
+        link
+    }
+}
+
+/// A string field of a link's payload, if it has one.
+fn payload_str(payload: &Value, name: &str) -> Option<String> {
+    payload.get(name).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// The sign-up question, asked on the page the link opened into. Renders the
+/// same token-carrying form the confirm page posts, with the answer's own
+/// marker, so the next POST spends the token with the answer.
+fn intents_step(
+    brand: &Brand,
+    token: &str,
+    list: &[cratefield_auth_core::intents::SignupIntent],
+    headers: &HeaderMap,
+) -> Response {
+    cratefield_auth_core::intents::step_page(
+        brand,
+        "/v1/auth-magic-link/consume",
+        &[("token", token), ("intents_step", "1")],
+        list,
+        &cratefield_auth_core::intents::request_locale(headers),
+        &[],
+    )
+}
+
 fn hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
@@ -530,6 +614,7 @@ async fn request(
 /// Everything both entry points do: limit, captcha, resolve the account,
 /// claim the send window, issue the link. Shared so the page cannot drift
 /// from the JSON route into a second set of rules about who gets a mail.
+#[allow(clippy::too_many_lines)]
 async fn decide(
     state: &ModuleState,
     scope: &Scope,
@@ -599,7 +684,16 @@ async fn decide(
     // deployment supports it; a fallback nobody chose is not a preference.
     let store_on_create = explicit_locale.and_then(|raw| settings.supported.canonicalize(raw));
 
-    let user_id = match (user, settings.allow_registration) {
+    // A new address for an application that asks its sign-up question (see
+    // `cratefield_auth_core::intents`) gets no account yet. The account is made
+    // when the link is opened, after the question is answered there, so the
+    // question is only ever shown to somebody holding the mailbox, and never
+    // reveals whether the address already has an account.
+    let link = LinkContext::from_return_to(safe_return_to(return_to).as_deref());
+    let defers_account =
+        defers_account(db, scope, user.as_ref(), settings.allow_registration, &link).await?;
+
+    let user_id: Option<String> = match (user, settings.allow_registration) {
         (Some(user), _) => {
             // A disabled account gets no link. Answered like everything
             // else, because "that account is switched off" is not a thing
@@ -607,11 +701,12 @@ async fn decide(
             if user.status != STATUS_ACTIVE {
                 return Ok(Verdict::Accepted);
             }
-            user.id
+            Some(user.id)
         }
+        (None, true) if defers_account => None,
         (None, true) => {
             match create_account(db, clock, id_gen, &email, store_on_create.as_deref()).await {
-                Ok(id) => id,
+                Ok(id) => Some(id),
                 Err(err) => {
                     tracing::error!(error = %err, "could not create an account for a magic link");
                     return Err(Problem::internal().instance(&scope.request_id));
@@ -645,7 +740,17 @@ async fn decide(
     }
 
     if let Err(err) = issue_link(
-        db, clock, id_gen, mailer, ctx, settings, &user_id, &email, return_to, &locale,
+        db,
+        clock,
+        id_gen,
+        mailer,
+        ctx,
+        settings,
+        user_id.as_deref(),
+        &email,
+        return_to,
+        &locale,
+        &link,
     )
     .await
     {
@@ -671,10 +776,11 @@ async fn issue_link(
     mailer: &dyn cratefield_core::Mailer,
     ctx: &cratefield_core::ModuleContext,
     settings: &crate::Settings,
-    user_id: &str,
+    user_id: Option<&str>,
     email: &str,
     return_to: Option<&str>,
     locale: &str,
+    link: &LinkContext,
 ) -> Result<(), cratefield_core::DbError> {
     let Some(token) = random_token() else {
         return Err(cratefield_core::DbError::Query(
@@ -685,15 +791,30 @@ async fn issue_link(
     let now = crate::handlers::iso(issued_at);
     let expires_at =
         crate::handlers::iso(issued_at.saturating_add(time::Duration::seconds(settings.ttl_secs)));
+    // What the link carries: where to go afterwards, and — for an account
+    // that is not made yet — the address it is for, and the application and
+    // any sign-up answers the sign-in is for. Nothing else.
+    let mut payload = serde_json::Map::new();
+    if let Some(return_to) = safe_return_to(return_to) {
+        payload.insert("return_to".to_owned(), json!(return_to));
+    }
+    if user_id.is_none() {
+        payload.insert("new_email".to_owned(), json!(email));
+    }
+    if let Some(client) = &link.client_id {
+        payload.insert("client_id".to_owned(), json!(client));
+    }
+    if let Some(intents) = &link.intents {
+        payload.insert("intents".to_owned(), json!(intents));
+    }
     let row = SingleUseTokenRow {
         id: id_gen.ulid(),
         kind: TOKEN_MAGIC_LINK.to_owned(),
         // Only the digest is stored. A leaked database row is not a way in.
         token_hash: Redacted(hash(&token)),
-        user_id: Some(user_id.to_owned()),
+        user_id: user_id.map(str::to_owned),
         client_id: None,
-        payload: safe_return_to(return_to)
-            .map(|return_to| json!({ "return_to": return_to }).to_string()),
+        payload: (!payload.is_empty()).then(|| serde_json::Value::Object(payload).to_string()),
         expires_at,
         consumed_at: None,
     };
@@ -704,7 +825,9 @@ async fn issue_link(
     // not the one they are using. Only this kind: retiring a user's
     // outstanding authorization codes because a link was requested would
     // break a parallel `/authorize`.
-    retire_unconsumed_tokens(db, TOKEN_MAGIC_LINK, user_id, &now).await?;
+    if let Some(user_id) = user_id {
+        retire_unconsumed_tokens(db, TOKEN_MAGIC_LINK, user_id, &now).await?;
+    }
     insert_single_use_token(db, &row).await?;
 
     let link = format!(
@@ -893,16 +1016,32 @@ async fn confirm(
         }
         return Err(problem);
     }
-    let token = url::form_urlencoded::parse(body.as_bytes())
+    let fields: Vec<(String, String)> = url::form_urlencoded::parse(body.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    let token = fields
+        .iter()
         .find(|(key, _)| key == "token")
-        .map(|(_, value)| value.to_string())
+        .map(|(_, value)| value.clone())
         .unwrap_or_default();
+    // The sign-up question's answer, when the step was submitted: the marker
+    // says the step was answered, even with nothing ticked.
+    let answer = fields
+        .iter()
+        .any(|(key, _)| key == "intents_step")
+        .then(|| {
+            fields
+                .iter()
+                .filter(|(key, _)| key == "intents")
+                .map(|(_, value)| value.clone())
+                .collect::<Vec<String>>()
+        });
     // The same shape the GET branch demands, so the two entry points stay
     // one rule and a malformed value never reaches `spend`.
     if !looks_like_a_token(&token) {
         return Ok(expired_page(&brand));
     }
-    match spend(&state, &scope, &headers, &token, &brand).await {
+    match spend(&state, &scope, &headers, &token, &brand, answer).await {
         Err(problem) if cratefield_auth_core::page::wants_html(&headers) => {
             Ok(cratefield_auth_core::page::problem_page(
                 &brand,
@@ -914,18 +1053,73 @@ async fn confirm(
     }
 }
 
+/// What the sign-up question decides for an opened link.
+enum Question {
+    /// Go on, recording these keys for the account when there are any.
+    Go(Option<Vec<String>>),
+    /// Ask the question first, with this client's list.
+    Ask(Vec<cratefield_auth_core::intents::SignupIntent>),
+}
+
+/// The sign-up question for a link (see `decide`): asked for an address with no
+/// account yet, when its application has a list and the answer is not given or
+/// not valid; and for an account that already exists, the application's own
+/// answer from `/authorize`, checked against the list, is what is recorded.
+async fn sign_up_question(
+    db: &dyn cratefield_core::Database,
+    scope: &Scope,
+    payload: &Value,
+    pending_email: Option<&str>,
+    answer: Option<&[String]>,
+) -> Result<Question, Problem> {
+    let list = match payload_str(payload, "client_id") {
+        Some(client) => cratefield_auth_core::intents::client_list(db, &client)
+            .await
+            .map_err(|_| Problem::new(&NOT_READY).instance(&scope.request_id))?,
+        None => None,
+    };
+    let Some(list) = list else {
+        return Ok(Question::Go(None));
+    };
+    if pending_email.is_some() {
+        return Ok(match answer {
+            Some(keys) => match cratefield_auth_core::intents::check_selection(&list, keys) {
+                Ok(chosen) => Question::Go(Some(chosen)),
+                Err(_) => Question::Ask(list),
+            },
+            None => Question::Ask(list),
+        });
+    }
+    // An application's own answer, given on /authorize, is recorded for the
+    // account it signs in.
+    let keys: Vec<String> = payload
+        .get("intents")
+        .and_then(Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter_map(|key| key.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Question::Go(
+        cratefield_auth_core::intents::check_selection(&list, &keys).ok(),
+    ))
+}
+
 /// Spends the token and signs the person in.
 ///
 /// Single-use is enforced by `consume_single_use_token`, which updates
 /// `where consumed_at is null and expires_at > now` and checks the
 /// affected row count. Two simultaneous consumes therefore produce one
 /// session and one refusal, rather than two sessions or a lost update.
+#[allow(clippy::too_many_lines)]
 async fn spend(
     state: &ModuleState,
     scope: &Scope,
     headers: &HeaderMap,
     token: &str,
     brand: &Brand,
+    answer: Option<Vec<String>>,
 ) -> Result<Response, Problem> {
     let Some(settings) = state.settings.as_ref() else {
         return Err(Problem::new(&NOT_READY));
@@ -950,6 +1144,30 @@ async fn spend(
         return Ok(expired_page(brand));
     }
 
+    let payload: Value = row
+        .payload
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| json!({}));
+    let client_id = payload_str(&payload, "client_id");
+    let pending_email = if row.user_id.is_none() {
+        payload_str(&payload, "new_email")
+    } else {
+        None
+    };
+    let chosen = match sign_up_question(
+        db,
+        scope,
+        &payload,
+        pending_email.as_deref(),
+        answer.as_deref(),
+    )
+    .await?
+    {
+        Question::Go(chosen) => chosen,
+        Question::Ask(list) => return Ok(intents_step(brand, token, &list, headers)),
+    };
+
     // The one statement that makes this single-use.
     let Ok(Some(spent)) = consume_single_use_token(db, &row.id, &now).await else {
         // Expired, or somebody else got there first. Both answer the same
@@ -957,8 +1175,25 @@ async fn spend(
         return Ok(expired_page(brand));
     };
 
-    let Some(user_id) = spent.user_id.clone() else {
-        return Ok(expired_page(brand));
+    let user_id = if let Some(user_id) = spent.user_id.clone() {
+        user_id
+    } else {
+        let Some(email) = pending_email.as_deref() else {
+            return Ok(expired_page(brand));
+        };
+        // Somebody may have made the account in the meantime; the link then
+        // answers as expired, as a used link does.
+        match user_by_primary_email(db, email).await {
+            Ok(None) => {}
+            _ => return Ok(expired_page(brand)),
+        }
+        match create_account(db, clock, id_gen, email, None).await {
+            Ok(id) => id,
+            Err(err) => {
+                tracing::error!(error = %err, "could not create an account for a magic link");
+                return Err(Problem::internal().instance(&scope.request_id));
+            }
+        }
     };
     let Ok(Some(user)) = user_by_id(db, &user_id).await else {
         return Ok(expired_page(brand));
@@ -977,6 +1212,16 @@ async fn spend(
         } else {
             ctx.events
                 .emit_in(scope, EVENT_EMAIL_VERIFIED, json!({ "user_id": user.id }));
+        }
+    }
+
+    if let (Some(client), Some(keys)) = (client_id.as_deref(), chosen.as_deref()) {
+        // A record failing must not stop a sign-in the person has earned; it
+        // is logged, and the application asks again on its next request.
+        if let Err(err) =
+            cratefield_auth_core::intents::record(db, clock, &user.id, client, keys).await
+        {
+            tracing::error!(error = %err, "could not record sign-up intents");
         }
     }
 

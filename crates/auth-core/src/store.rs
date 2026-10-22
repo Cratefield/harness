@@ -2219,6 +2219,107 @@ pub(crate) async fn set_client_roles_claim(
     db.execute(&Statement::render(&update)).await
 }
 
+/// A client's registered sign-up intents, as the JSON the admin API stored
+/// (`None` when the client has none). Read raw: [`crate::intents`] parses it.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn client_signup_intents_json(
+    db: &dyn Database,
+    id: &str,
+) -> Result<Option<String>, DbError> {
+    let query = Query::select()
+        .column(iden("signup_intents"))
+        .from(iden("clients"))
+        .and_where(Expr::col(iden("id")).eq(id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| optional::<String>(row, "signup_intents")))
+}
+
+/// Stores (or with `None`, clears) a client's sign-up intents JSON.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn set_client_signup_intents_json(
+    db: &dyn Database,
+    id: &str,
+    json: Option<&str>,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("clients"))
+        .values([(iden("signup_intents"), json.map(str::to_owned).into())])
+        .and_where(Expr::col(iden("id")).eq(id));
+    db.execute(&Statement::render(&update)).await
+}
+
+/// The intent keys an account chose for one client, as stored JSON.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn user_client_intents_json(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+) -> Result<Option<String>, DbError> {
+    let query = Query::select()
+        .column(iden("intents"))
+        .from(iden("user_client_intents"))
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("client_id")).eq(client_id))
+        .limit(1)
+        .to_owned();
+    let rows = db.query(&Statement::render(&query)).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| optional::<String>(row, "intents")))
+}
+
+/// Records the intent keys an account chose for one client: an update when
+/// the pair already has a row, an insert otherwise.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when a statement fails.
+pub(crate) async fn set_user_client_intents_json(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+    json: &str,
+    updated_at: &str,
+) -> Result<(), DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("user_client_intents"))
+        .values([
+            (iden("intents"), json.to_owned().into()),
+            (iden("updated_at"), updated_at.to_owned().into()),
+        ])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("client_id")).eq(client_id));
+    if db.execute(&Statement::render(&update)).await? == 0 {
+        let mut insert = Query::insert();
+        insert
+            .into_table(iden("user_client_intents"))
+            .columns(["user_id", "client_id", "intents", "updated_at"])
+            .values_panic([
+                user_id.to_owned().into(),
+                client_id.to_owned().into(),
+                json.to_owned().into(),
+                updated_at.to_owned().into(),
+            ]);
+        db.execute(&Statement::render(&insert)).await?;
+    }
+    Ok(())
+}
+
 /// One `step_up_transactions` row: a demand for a fresh ceremony (issue
 /// #912). Bound to an account and client once it is made by a signed-in
 /// session; an unbound demand, made before anyone is signed in, belongs to

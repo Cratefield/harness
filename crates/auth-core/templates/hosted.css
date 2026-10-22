@@ -107,3 +107,29 @@ input.cf-toast-close::after { content: "\00d7"; display: block; text-align: cent
 .cf-toast:has(input.cf-toast-close:checked) { display: none; }
 @keyframes cf-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .cf-toast { animation: none; } }
+
+/* The Continue screen (one entry flow): a secondary action, the invite-only
+   notice, the "What brings you here?" checkboxes. Plain controls, so every one
+   works with script off and reads the same to a screen reader. */
+.cf-secondary {
+  display: block; width: 100%; margin-top: .6rem; padding: .75rem 1rem; font: inherit;
+  color: var(--cf-text); background: transparent; cursor: pointer;
+  border: 1px solid var(--cf-border); border-radius: var(--cf-radius);
+}
+.cf-secondary:hover { border-color: var(--cf-accent); }
+.cf-secondary:focus-visible, .cf-intent input:focus-visible { outline: 2px solid var(--cf-text); outline-offset: 3px; }
+.cf-notice {
+  margin: 1rem 0 0; color: var(--cf-muted); font-size: .875rem; text-align: left;
+}
+.cf-hint-line { color: var(--cf-muted); font-size: .9rem; overflow-wrap: anywhere; }
+.cf-section-title { margin: 1.75rem 0 .5rem; color: var(--cf-muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; }
+fieldset.cf-intents { border: 0; margin: 0 0 1.25rem; padding: 0; text-align: left; }
+fieldset.cf-intents legend { color: var(--cf-muted); font-size: .9rem; margin-bottom: .75rem; padding: 0; }
+.cf-intent {
+  display: grid; grid-template-columns: auto 1fr; column-gap: .65rem; align-items: start;
+  padding: .75rem .85rem; margin-bottom: .5rem; background: var(--cf-surface);
+  border: 1px solid var(--cf-border); border-radius: var(--cf-radius);
+}
+.cf-intent input { margin-top: .2rem; width: 1.1rem; height: 1.1rem; }
+.cf-intent label { font-weight: 600; cursor: pointer; }
+.cf-intent .sub { grid-column: 2; margin: .2rem 0 0; font-size: .85rem; text-align: left; }

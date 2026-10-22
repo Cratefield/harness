@@ -1025,9 +1025,19 @@ async fn every_button_on_the_chooser_goes_somewhere() {
     let page = body_of(get(&kit, &authorize_uri(""), None).await).await;
     let links = hrefs(&page);
     assert!(
-        links.len() >= 5,
+        links.len() >= 4,
         "the chooser rendered {} links — this test is checking nothing:\n{page}",
         links.len()
+    );
+    // The email step is a form on the magic link's own page, not a link.
+    assert!(
+        page.contains("action=\"/v1/auth-magic-link/start\""),
+        "the email step is gone: {page}"
+    );
+    assert_ne!(
+        get(&kit, "/v1/auth-magic-link/start", None).await.status(),
+        StatusCode::NOT_FOUND,
+        "the email step posts to a route no module serves"
     );
 
     for href in &links {
@@ -1042,11 +1052,7 @@ async fn every_button_on_the_chooser_goes_somewhere() {
     // A provider with no credentials answers `503 provider-unconfigured`
     // rather than 404, which is the distinction this test rests on: the
     // route exists, this deployment has not configured it.
-    for expected in [
-        "/v1/auth-oidc/google/start",
-        "/v1/auth-magic-link/start",
-        "/v1/auth-password/start",
-    ] {
+    for expected in ["/v1/auth-oidc/google/start", "/v1/auth-password/start"] {
         assert!(
             links.iter().any(|href| href.starts_with(expected)),
             "the {expected} button is gone: {links:?}"
