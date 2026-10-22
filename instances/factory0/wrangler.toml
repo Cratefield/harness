@@ -130,6 +130,8 @@ migrations_dir = "../../crates/auth-worker/migrations"
 crons = ["*/15 * * * *"]
 
 [env.production.vars]
+TURNSTILE_SITE_KEY = "0x4AAAAAAEnfXb-GqJxqHjcZ"
+AUTH_TURNSTILE_HOSTNAME = "auth.factory0.ventures"
 ENV = "production"
 AUTH_PUBLIC_URL = "https://auth.factory0.ventures"
 AUTH_CORE_ISSUER = "https://auth.factory0.ventures"
