@@ -76,13 +76,16 @@ account with an address does.
 ## One entry flow: the Continue screen and sign-up intents
 
 There is one sign-in screen, the chooser `GET /authorize` renders when nobody
-is signed in. It is titled **Continue**, and a person never chooses between
-signing up and signing in: an email step (a link to the address, which is
-also how a new account is verified), a "Continue with a passkey" button when
-passkeys are on (offered by autofill too, through conditional UI when the
-browser supports it), and the other enabled methods under "Other ways to
-continue". Pass `login_hint` and the address is filled in and the method
-choice is shown straight away.
+is signed in. It is titled **Sign in**, with a line saying a new account is
+set up when the person continues, so a person never chooses between signing
+up and signing in. The order is one decision top to bottom: a "Sign in with a
+passkey" button first and alone when passkeys are on (offered by autofill too,
+through conditional UI when the browser supports it), an "or" divider, then the
+email section (the address, the Turnstile widget when the instance has one,
+and "Email me a sign-in link"; a link to the address is also how a new account
+is verified), and the other enabled methods under "Other ways to sign in".
+Pass `login_hint` and the address is filled in, the email field is skipped,
+and the passkey stays first.
 
 Whether an address is new is decided after the person proves the mailbox, so
 the screen never reveals whether an address has an account. With registration

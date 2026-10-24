@@ -33,6 +33,15 @@
 //! | `AUTH_BRAND_FONT_DISPLAY` | Heading font stack | the body stack |
 //! | `AUTH_BRAND_FONT_MONO` | Label and code font stack | the system monospace stack |
 //! | `AUTH_BRAND_FONT_CSS_URL` | An `https` stylesheet that loads those fonts | no web fonts |
+//! | `AUTH_BRAND_PRIMARY` | Background of the primary button (the page's main action) | the accent |
+//! | `AUTH_BRAND_PRIMARY_TEXT` | Label colour on the primary button (`AUTH_BRAND_ACCENT_TEXT` is its older name) | black or white, whichever reads on the primary |
+//! | `AUTH_BRAND_SURFACE` | Cards, inputs and secondary buttons | mixed from the background and text |
+//! | `AUTH_BRAND_LINE` | Borders and rules | mixed from the background and text |
+//! | `AUTH_BRAND_MUTED` | Secondary text | mixed from the background and text |
+//!
+//! The accent is for links and focus rings. The primary button takes
+//! `AUTH_BRAND_PRIMARY` when set and the accent otherwise, so a brand whose
+//! main action is not its accent (a light button on a dark page) sets it.
 //!
 //! Surfaces, borders and muted text are mixed from the background and
 //! text colours when either is set, so a two-colour brand needs no more
@@ -83,6 +92,16 @@ pub const FONT_DISPLAY_KEY: &str = "AUTH_BRAND_FONT_DISPLAY";
 pub const FONT_MONO_KEY: &str = "AUTH_BRAND_FONT_MONO";
 /// `AUTH_BRAND_FONT_CSS_URL`: an `https` stylesheet that loads the fonts.
 pub const FONT_CSS_URL_KEY: &str = "AUTH_BRAND_FONT_CSS_URL";
+/// `AUTH_BRAND_PRIMARY`: the primary button's background.
+pub const PRIMARY_KEY: &str = "AUTH_BRAND_PRIMARY";
+/// `AUTH_BRAND_PRIMARY_TEXT`: the primary button's label colour.
+pub const PRIMARY_TEXT_KEY: &str = "AUTH_BRAND_PRIMARY_TEXT";
+/// `AUTH_BRAND_SURFACE`: cards, inputs and secondary buttons.
+pub const SURFACE_KEY: &str = "AUTH_BRAND_SURFACE";
+/// `AUTH_BRAND_LINE`: borders and rules.
+pub const LINE_KEY: &str = "AUTH_BRAND_LINE";
+/// `AUTH_BRAND_MUTED`: secondary text.
+pub const MUTED_KEY: &str = "AUTH_BRAND_MUTED";
 
 /// The accent colour when `AUTH_BRAND_ACCENT` is unset: a neutral blue
 /// that belongs to no app.
@@ -151,8 +170,10 @@ pub struct PageTheme {
     pub text: String,
     /// Secondary text.
     pub muted: String,
-    /// The label colour on an accent-filled button.
-    pub accent_text: String,
+    /// The primary button's background.
+    pub primary: String,
+    /// The label colour on the primary button.
+    pub primary_text: String,
     /// Field errors and error notices.
     pub danger: String,
     /// Corner radius, CSS pixels.
@@ -184,19 +205,24 @@ impl PageTheme {
         // The neutral greys belong to the neutral background; once an
         // instance names its own colours, the in-between shades are mixed
         // from them so they cannot clash.
-        let (surface, border, muted) = if configured_bg.is_none() && configured_text.is_none() {
-            (
-                DEFAULT_SURFACE.to_owned(),
-                DEFAULT_BORDER.to_owned(),
-                DEFAULT_MUTED.to_owned(),
-            )
-        } else {
-            (
-                mix(&background, &text, 0.07),
-                mix(&background, &text, 0.18),
-                mix(&background, &text, 0.62),
-            )
-        };
+        let (derived_surface, derived_border, derived_muted) =
+            if configured_bg.is_none() && configured_text.is_none() {
+                (
+                    DEFAULT_SURFACE.to_owned(),
+                    DEFAULT_BORDER.to_owned(),
+                    DEFAULT_MUTED.to_owned(),
+                )
+            } else {
+                (
+                    mix(&background, &text, 0.07),
+                    mix(&background, &text, 0.18),
+                    mix(&background, &text, 0.62),
+                )
+            };
+        // An explicit shade wins over the derived one.
+        let surface = colour(SURFACE_KEY).unwrap_or(derived_surface);
+        let border = colour(LINE_KEY).unwrap_or(derived_border);
+        let muted = colour(MUTED_KEY).unwrap_or(derived_muted);
         let scheme = match get(cfg, SCHEME_KEY)
             .as_deref()
             .and_then(|v| check_scheme(v).ok())
@@ -205,20 +231,27 @@ impl PageTheme {
             None if luminance(&background) > 0.5 => "light",
             None => "dark",
         };
-        let accent_text = colour(ACCENT_TEXT_KEY).unwrap_or_else(|| {
-            if luminance(accent) > 0.45 {
-                "#0a0a0b".to_owned()
-            } else {
-                "#ffffff".to_owned()
-            }
-        });
+        // The primary button is the accent unless the instance names its own
+        // colour. Its label is read from `AUTH_BRAND_PRIMARY_TEXT`, then from
+        // the older `AUTH_BRAND_ACCENT_TEXT`, then picked for contrast.
+        let primary = colour(PRIMARY_KEY).unwrap_or_else(|| accent.to_owned());
+        let primary_text = colour(PRIMARY_TEXT_KEY)
+            .or_else(|| colour(ACCENT_TEXT_KEY))
+            .unwrap_or_else(|| {
+                if luminance(&primary) > 0.45 {
+                    "#0a0a0b".to_owned()
+                } else {
+                    "#ffffff".to_owned()
+                }
+            });
         let font_body = font(FONT_BODY_KEY).unwrap_or_else(|| DEFAULT_FONT_BODY.to_owned());
         Self {
             scheme,
             surface,
             border,
             muted,
-            accent_text,
+            primary,
+            primary_text,
             danger: colour(DANGER_KEY).unwrap_or_else(|| DEFAULT_DANGER.to_owned()),
             radius: get(cfg, RADIUS_KEY)
                 .and_then(|value| check_radius(&value).ok())
@@ -293,7 +326,7 @@ impl Brand {
         format!(
             ":root {{ color-scheme: {scheme}; --cf-bg: {bg}; --cf-surface: {surface}; \
 --cf-border: {border}; --cf-text: {text}; --cf-muted: {muted}; --cf-accent: {accent}; \
---cf-accent-text: {accent_text}; --cf-danger: {danger}; --cf-radius: {radius}px; \
+--cf-primary: {primary}; --cf-primary-text: {primary_text}; --cf-danger: {danger}; --cf-radius: {radius}px; \
 --cf-font-body: {body}; --cf-font-display: {display}; --cf-font-mono: {mono}; }}\n{HOSTED_CSS}",
             scheme = t.scheme,
             bg = t.background,
@@ -302,7 +335,8 @@ impl Brand {
             text = t.text,
             muted = t.muted,
             accent = self.accent,
-            accent_text = t.accent_text,
+            primary = t.primary,
+            primary_text = t.primary_text,
             danger = t.danger,
             radius = t.radius,
             body = t.font_body,
@@ -316,7 +350,7 @@ impl Brand {
     /// instance's decision, not the library's.
     #[must_use]
     pub fn problems(cfg: &dyn Config) -> Vec<String> {
-        let checks: [(&str, Check); 17] = [
+        let checks: [(&str, Check); 22] = [
             (NAME_KEY, check_text),
             (FOOTER_KEY, check_text),
             (LOGO_URL_KEY, check_logo_url),
@@ -327,6 +361,11 @@ impl Brand {
             (BACKGROUND_KEY, check_accent),
             (TEXT_KEY, check_accent),
             (ACCENT_TEXT_KEY, check_accent),
+            (PRIMARY_KEY, check_accent),
+            (PRIMARY_TEXT_KEY, check_accent),
+            (SURFACE_KEY, check_accent),
+            (LINE_KEY, check_accent),
+            (MUTED_KEY, check_accent),
             (DANGER_KEY, check_accent),
             (SCHEME_KEY, |value| check_scheme(value).map(str::to_owned)),
             (RADIUS_KEY, |value| {
@@ -583,8 +622,9 @@ mod tests {
         assert_eq!(theme.border, DEFAULT_BORDER);
         assert_eq!(theme.radius, DEFAULT_RADIUS);
         assert_eq!(theme.font_css_url, None);
-        // White reads on the neutral blue.
-        assert_eq!(theme.accent_text, "#ffffff");
+        // White reads on the neutral blue, and the primary is the accent.
+        assert_eq!(theme.primary, DEFAULT_ACCENT);
+        assert_eq!(theme.primary_text, "#ffffff");
         let css = brand.stylesheet();
         assert!(css.contains("--cf-bg: #0a0a0b;"), "{css}");
         assert!(css.contains("--cf-radius: 10px;"), "{css}");
@@ -623,7 +663,7 @@ mod tests {
         assert_eq!(theme.danger, "#ff3b2f");
         assert_eq!(theme.radius, 0);
         // Dark text reads on the lime; the greys are mixed from the two.
-        assert_eq!(theme.accent_text, "#0a0a0b");
+        assert_eq!(theme.primary_text, "#0a0a0b");
         assert_ne!(theme.surface, DEFAULT_SURFACE);
         assert!(luminance(&theme.surface) > luminance(&theme.background));
         assert!(luminance(&theme.muted) < luminance(&theme.text));
@@ -729,5 +769,88 @@ mod tests {
         assert_eq!(brand.privacy_url, None);
         assert_eq!(brand.support_email, None);
         assert_eq!(brand.name, "acme");
+    }
+
+    /// The Ledgers palette (dark), as its instance sets it: every brand
+    /// setting lands in the stylesheet as the CSS variable the shared rules
+    /// read, and the primary button takes its own colour, not the accent.
+    #[test]
+    fn brand_settings_render_as_css_variables() {
+        let cfg = MapConfig::from_pairs([
+            (ACCENT_KEY, "#7FA6C9"),
+            (PRIMARY_KEY, "#E4E7EB"),
+            (PRIMARY_TEXT_KEY, "#0F1217"),
+            (BACKGROUND_KEY, "#0F1217"),
+            (SURFACE_KEY, "#151920"),
+            (LINE_KEY, "#252B34"),
+            (TEXT_KEY, "#E4E7EB"),
+            (MUTED_KEY, "#B8C0CA"),
+            (FONT_BODY_KEY, "'Source Sans 3', system-ui, sans-serif"),
+            (FONT_DISPLAY_KEY, "'Source Sans 3', system-ui, sans-serif"),
+            (FONT_MONO_KEY, "'Source Code Pro', ui-monospace, monospace"),
+            (
+                FONT_CSS_URL_KEY,
+                "https://fonts.googleapis.com/css2?family=Source+Sans+3&family=Source+Code+Pro&display=swap",
+            ),
+        ]);
+        assert!(
+            Brand::problems(&cfg).is_empty(),
+            "{:?}",
+            Brand::problems(&cfg)
+        );
+        let brand = Brand::from_config(&cfg, &venture());
+        let css = brand.stylesheet();
+        for expected in [
+            "--cf-bg: #0f1217;",
+            "--cf-surface: #151920;",
+            "--cf-border: #252b34;",
+            "--cf-text: #e4e7eb;",
+            "--cf-muted: #b8c0ca;",
+            "--cf-accent: #7fa6c9;",
+            "--cf-primary: #e4e7eb;",
+            "--cf-primary-text: #0f1217;",
+            "--cf-font-body: 'Source Sans 3', system-ui, sans-serif;",
+            "--cf-font-mono: 'Source Code Pro', ui-monospace, monospace;",
+        ] {
+            assert!(css.contains(expected), "{expected} missing from {css}");
+        }
+        // The shared rules read the primary, not the accent.
+        assert!(css.contains("background: var(--cf-primary);"), "{css}");
+        assert!(css.contains("color: var(--cf-primary-text);"), "{css}");
+        assert!(!css.contains("--cf-accent-text"), "{css}");
+    }
+
+    /// The primary button keeps the accent colour and its label when an
+    /// instance sets only the older keys, so existing instances look as before.
+    #[test]
+    fn primary_defaults_to_the_accent_and_the_old_label_key_still_applies() {
+        let cfg = MapConfig::from_pairs([(ACCENT_KEY, "#C6FF3D"), (ACCENT_TEXT_KEY, "#0B0B0A")]);
+        let theme = Brand::from_config(&cfg, &venture()).theme;
+        assert_eq!(theme.primary, "#c6ff3d");
+        assert_eq!(theme.primary_text, "#0b0b0a");
+    }
+
+    #[test]
+    fn malformed_primary_and_shade_values_are_problems() {
+        let cfg = MapConfig::from_pairs([
+            (PRIMARY_KEY, "blue;}"),
+            (PRIMARY_TEXT_KEY, "white"),
+            (SURFACE_KEY, "#12"),
+            (LINE_KEY, "url(x)"),
+            (MUTED_KEY, "grey"),
+        ]);
+        let problems = Brand::problems(&cfg).join("\n");
+        for key in [
+            PRIMARY_KEY,
+            PRIMARY_TEXT_KEY,
+            SURFACE_KEY,
+            LINE_KEY,
+            MUTED_KEY,
+        ] {
+            assert!(problems.contains(key), "{key} not refused: {problems}");
+        }
+        let theme = Brand::from_config(&cfg, &venture()).theme;
+        assert_eq!(theme.primary, DEFAULT_ACCENT);
+        assert_eq!(theme.surface, DEFAULT_SURFACE);
     }
 }

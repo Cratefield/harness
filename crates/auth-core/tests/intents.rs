@@ -359,9 +359,10 @@ async fn the_continue_screen_offers_one_email_step_and_a_passkey_first() {
     let response = send(&kit, Method::GET, &authorize_uri(&id, ""), None, &[], None).await;
     assert_eq!(response.status(), StatusCode::OK);
     let page = body_text(response).await;
-    assert!(page.contains("<h1>Continue</h1>"), "{page}");
+    assert!(page.contains("<h1>Sign in</h1>"), "{page}");
+    assert!(page.contains("We'll set up your account"), "{page}");
     assert!(!page.contains("Sign up"), "{page}");
-    assert!(!page.contains("Sign in</h1>"), "{page}");
+    assert!(!page.contains("Continue</h1>"), "{page}");
     assert!(
         page.contains("action=\"/v1/auth-magic-link/start\""),
         "{page}"
@@ -372,7 +373,7 @@ async fn the_continue_screen_offers_one_email_step_and_a_passkey_first() {
         "{page}"
     );
     assert!(page.contains("id=\"cf-passkey\""), "{page}");
-    assert!(page.contains("Email me a link"), "{page}");
+    assert!(page.contains("Email me a sign-in link"), "{page}");
     assert!(page.contains("Continue with Google"), "{page}");
     assert!(!page.contains("This app is invite-only"), "{page}");
 }
@@ -400,7 +401,7 @@ async fn login_hint_prefills_the_address_and_shows_the_method_choice() {
     let uri = authorize_uri(&id, "&login_hint=Ada%40Example.com");
     let page = body_text(send(&kit, Method::GET, &uri, None, &[], None).await).await;
     assert!(
-        page.contains("Continuing as <strong>ada@example.com</strong>"),
+        page.contains("Signing in as <strong>ada@example.com</strong>"),
         "{page}"
     );
     assert!(
