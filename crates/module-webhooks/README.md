@@ -28,7 +28,8 @@ This module ships **no HTTP routes of its own**. `GET /v1/webhooks` answers
 ```rust,ignore
 use cratefield_module_webhooks::Webhooks;
 
-let webhooks = Webhooks::new().max_attempts(5);
+// At boot, from the deployment's config: a bad WEBHOOKS_SIGNATURE_ALIAS is refused here.
+let webhooks = Webhooks::from_config(&*config)?.max_attempts(5);
 
 // Registration — the secret crosses this boundary once, and never again.
 let created = webhooks
@@ -68,12 +69,31 @@ Each delivery is one `POST` with a JSON envelope:
 | `Cratefield-Signature` | `t=<unix seconds>,v1=<hex>`, HMAC-SHA256 over `{t}.{body}` with the endpoint's secret |
 | `Cratefield-Event-Id` | The envelope's `id`; the dedupe key for at-least-once delivery |
 | `Cratefield-Event-Type` | The envelope's `type` |
+| The `WEBHOOKS_SIGNATURE_ALIAS` name, when set | The same `Cratefield-Signature` value, under the configured name |
 
 The timestamp is bound **into** the signature, so a captured delivery
 cannot be replayed with a fresh timestamp: re-stamping invalidates the MAC.
 A receiver verifies by recomputing it — the same scheme
 `cratefield-adapter-webhook-tracker` signs with, so one verifier covers
 both.
+
+## Verifying deliveries
+
+With `WEBHOOKS_SIGNATURE_ALIAS` set, a delivery carries both headers with
+one identical value, so a receiver that expects its product's own header
+name verifies the same way. The alias must be an HTTP header token, and it
+may not be `Cratefield-Signature`, `Content-Type`, a header listed above, or a
+transport-managed header such as `Host` or `Content-Length`, compared
+case-insensitively. An empty value counts as unset.
+
+`Webhooks::from_config` refuses an invalid alias at startup. `Webhooks::new()`
+does not read it, but `validate_config`, which the Workers runtime logs once
+per isolate at cold start, still reports one. Deliveries read
+`WEBHOOKS_SIGNATURE_ALIAS` from config on every pass. A value that is not
+usable at that point fails the pass before any row is claimed, so nothing
+is sent unsigned or under the wrong names. `Webhooks::signature_headers()`
+lists the names `from_config` stored; the drain takes its names from the
+config it is given.
 
 ## Delivery policy
 
@@ -139,6 +159,7 @@ Keys are `SCREAMING_SNAKE`, prefixed with the module name. All optional.
 | Key | Default | Meaning |
 |---|---|---|
 | `WEBHOOKS_MAX_ATTEMPTS` | `5` | Dead-letter a delivery after this many failed attempts. Must be a whole number in `1..=1000` — the same range the builder's `max_attempts` clamps to |
+| `WEBHOOKS_SIGNATURE_ALIAS` | unset | A second header name that carries the same `Cratefield-Signature` value. Read on every drain pass, and checked at boot by `Webhooks::from_config`; unset or empty sends the one header only. Must be an HTTP header token, not `Cratefield-Signature`, another header the module sends, or a transport-managed header such as `Host` |
 
 ## Data
 
