@@ -27,6 +27,6 @@ harness D1 write-bind path fails invisibly on wasm. Not yet wired to the site.
 export CLOUDFLARE_API_TOKEN=...   # Kontinuum account (53e50d9d…)
 export CLOUDFLARE_ACCOUNT_ID=53e50d9dab2b9b72e39ce243d0a79e7f
 worker-build --release
-npx wrangler d1 migrations apply cratefield-waitlist --remote
-npx wrangler deploy
+bunx wrangler d1 migrations apply cratefield-waitlist --remote
+bunx wrangler deploy
 ```

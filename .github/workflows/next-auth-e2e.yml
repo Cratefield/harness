@@ -45,7 +45,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   NEXT_TELEMETRY_DISABLED: 1
-  # Named explicitly, not resolved from node_modules: the root `npm ci` installs
+  # Named explicitly, not resolved from node_modules: the root `bun install` installs
   # the wrangler that @cloudflare/vitest-pool-workers pins (4.124.0), whose
   # workerd predates the Worker's `compatibility_date` (2026-09-01) and refuses
   # to start it.
@@ -68,21 +68,23 @@ jobs:
       # `wrangler dev` builds the Worker with worker-build; bunx runs wrangler,
       # matching the `wrangler-dev` job in ci.yml.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.6'
       - name: Install worker-build
         run: cargo install -q --locked worker-build
       - name: "Build @cratefield/auth (the example's file: dependency)"
         run: |
-          npm ci
-          npm run build -w @cratefield/auth
+          bun install --frozen-lockfile
+          bun run --filter @cratefield/auth build
       - name: Install example dependencies
         working-directory: examples/next-auth
-        run: npm ci
+        run: bun install --frozen-lockfile
       - name: Install Chromium
         working-directory: examples/next-auth
-        run: npx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium
       - name: Write examples/next-auth/idp/.dev.vars
         working-directory: examples/next-auth
-        run: npm run idp
+        run: bun run idp
       - name: Apply local D1 migrations
         working-directory: examples/next-auth/idp
         run: bunx "$WRANGLER" d1 migrations apply DB --local
@@ -98,13 +100,13 @@ jobs:
           echo "worker never became ready"; cat "$RUNNER_TEMP/wrangler.log"; exit 1
       - name: Register the client and test user
         working-directory: examples/next-auth
-        run: npm run setup
+        run: bun run setup
       - name: Build the app
         working-directory: examples/next-auth
-        run: npm run build
+        run: bun run build
       - name: Run the e2e test
         working-directory: examples/next-auth
-        run: npm run test:e2e
+        run: bun run test:e2e
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4

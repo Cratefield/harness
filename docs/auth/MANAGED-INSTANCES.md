@@ -64,8 +64,8 @@ passkey.
 Per environment, on the Cloudflare account that will run the Worker:
 
 ```sh
-npx wrangler d1 create <app>-auth-staging
-npx wrangler d1 create <app>-auth-production
+bunx wrangler d1 create <app>-auth-staging
+bunx wrangler d1 create <app>-auth-production
 ```
 
 Paste the two ids in place of the placeholders (`REPLACE_WITH_STAGING_D1_ID`
@@ -115,8 +115,8 @@ production):
 | `AUTH_META_CLIENT_SECRET` | When Meta is enabled |
 
 ```sh
-npx wrangler secret put HARNESS_SECRET            # staging
-npx wrangler secret put HARNESS_SECRET --env production
+bunx wrangler secret put HARNESS_SECRET            # staging
+bunx wrangler secret put HARNESS_SECRET --env production
 ```
 
 Each instance has its own values. Never reuse a secret or signing key

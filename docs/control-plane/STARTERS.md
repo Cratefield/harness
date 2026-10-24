@@ -47,7 +47,7 @@ The same five points, all three frameworks:
 4. Carry `.env.example` with the venture URL and nothing secret. The
    variable is `VENTURE_URL`; a starter holds no credentials, tokens or
    keys, because a venture's admin token belongs to whoever deployed it.
-5. Pass a stated smoke test, run as `npm run smoke`: fetch
+5. Pass a stated smoke test, run as `bun run smoke`: fetch
    `$VENTURE_URL/__surface`, assert the two modules appear, and submit
    the waitlist join action on a venture deployed for the purpose.
 
@@ -69,7 +69,7 @@ every `fz` and surface question; the `llms.txt` file itself, copied from
 {
   "mcpServers": {
     "cratefield": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["-y", "<package #160 publishes>"]
     }
   }

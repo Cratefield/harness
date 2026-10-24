@@ -5,7 +5,7 @@
 // errors, and rebuild exactly the committed <case>.message.json UIMessage.
 //
 // Regenerate the .message.json snapshots after an intentional encoder
-// change with: UPDATE_UI_MESSAGE_FIXTURES=1 npm test -w @cratefield/ui-message-contract
+// change with: UPDATE_UI_MESSAGE_FIXTURES=1 bun run --filter @cratefield/ui-message-contract test
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

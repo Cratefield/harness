@@ -67,23 +67,23 @@ Full runbook: [`docs/auth/MANAGED-INSTANCES.md`](../../docs/auth/MANAGED-INSTANC
 1. **D1.** Create both databases on the Cloudflare account that holds
    `ledgers.sh`, then replace the two placeholders in `wrangler.toml`:
    ```sh
-   npx wrangler d1 create ledgers-auth-staging
-   npx wrangler d1 create ledgers-auth-production
+   bunx wrangler d1 create ledgers-auth-staging
+   bunx wrangler d1 create ledgers-auth-production
    ```
 2. **Migrations.** The deploy workflow applies them before every deploy
    (`wrangler d1 migrations apply DB --remote`). To apply by hand:
    ```sh
-   npx wrangler d1 migrations apply DB --remote
-   npx wrangler d1 migrations apply DB --remote --env production
+   bunx wrangler d1 migrations apply DB --remote
+   bunx wrangler d1 migrations apply DB --remote --env production
    ```
 3. **Secrets**, by name only, per environment (never in git or a log):
    ```sh
-   npx wrangler secret put HARNESS_SECRET                 # 32+ random bytes
-   npx wrangler secret put ADMIN_TOKEN                    # 32+ random bytes
-   npx wrangler secret put AUTH_CORE_SIGNING_KEYS         # JSON array of P-256 private JWKs
-   npx wrangler secret put AUTH_CORE_SIGNING_KEY_ACTIVE   # the active signing kid
-   npx wrangler secret put OWLPOST_API_KEY                # Owlpost key scoped to send.ledgers.sh
-   npx wrangler secret put TURNSTILE_SECRET               # the Turnstile site's secret
+   bunx wrangler secret put HARNESS_SECRET                 # 32+ random bytes
+   bunx wrangler secret put ADMIN_TOKEN                    # 32+ random bytes
+   bunx wrangler secret put AUTH_CORE_SIGNING_KEYS         # JSON array of P-256 private JWKs
+   bunx wrangler secret put AUTH_CORE_SIGNING_KEY_ACTIVE   # the active signing kid
+   bunx wrangler secret put OWLPOST_API_KEY                # Owlpost key scoped to send.ledgers.sh
+   bunx wrangler secret put TURNSTILE_SECRET               # the Turnstile site's secret
    ```
    Add `--env production` for production. Do not reuse any value from
    another instance.

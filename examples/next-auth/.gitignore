@@ -3,7 +3,7 @@
 out/
 next-env.d.ts
 *.tsbuildinfo
-# Local secrets written by `npm run setup`
+# Local secrets written by `bun run setup`
 .env.local
 # Dependencies
 node_modules/

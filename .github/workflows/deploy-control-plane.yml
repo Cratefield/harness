@@ -81,6 +81,9 @@ jobs:
         working-directory: crates/control-plane
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.6'
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
@@ -116,7 +119,7 @@ jobs:
           grep -q "database_id = \"${id}\"" wrangler.toml
 
       - name: Apply D1 migrations (remote)
-        run: npx --yes "wrangler@${WRANGLER_VERSION}" d1 migrations apply DB --env production --remote
+        run: bunx "wrangler@${WRANGLER_VERSION}" d1 migrations apply DB --env production --remote
 
       - name: Build + deploy
         uses: cloudflare/wrangler-action@v3
@@ -134,12 +137,12 @@ jobs:
         # (including a value the owner set by hand) is never replaced.
         run: |
           set -euo pipefail
-          existing="$(npx --yes "wrangler@${WRANGLER_VERSION}" secret list --env production --format json | jq -r '.[].name')"
+          existing="$(bunx "wrangler@${WRANGLER_VERSION}" secret list --env production --format json | jq -r '.[].name')"
           for name in HARNESS_SECRET ADMIN_TOKEN; do
             if grep -qx "$name" <<< "$existing"; then
               echo "keep ${name} (already set)"
             else
-              openssl rand -hex 32 | npx --yes "wrangler@${WRANGLER_VERSION}" secret put "$name" --env production > /dev/null
+              openssl rand -hex 32 | bunx "wrangler@${WRANGLER_VERSION}" secret put "$name" --env production > /dev/null
               echo "set  ${name} (generated, not shown)"
             fi
           done

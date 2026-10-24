@@ -1,7 +1,7 @@
 // Register the example's OAuth client and its test user against a running,
 // migrated local IdP, then write `examples/next-auth/.env.local`.
 //
-// Run from the example root, after the IdP is up: `npm run setup`.
+// Run from the example root, after the IdP is up: `bun run setup`.
 
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -32,7 +32,7 @@ try {
   // Fall through to the shared error below.
 }
 if (!adminToken) {
-  throw new Error(`no ADMIN_TOKEN in ${devVarsPath}. Run \`npm run idp\` first.`);
+  throw new Error(`no ADMIN_TOKEN in ${devVarsPath}. Run \`bun run idp\` first.`);
 }
 
 const redirectUri = `${APP}/api/auth/callback`;

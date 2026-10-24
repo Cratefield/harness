@@ -15,6 +15,10 @@ PROGRESS.md
 /*-BRIEF.md
 node_modules/
 
+# bun is the only package manager here: bun.lock is the lockfile. A stray
+# package-lock.json means someone ran npm, which would fork the resolution.
+package-lock.json
+
 # Local worktrees. `git add -A` otherwise stages one as a gitlink.
 .worktrees/
 

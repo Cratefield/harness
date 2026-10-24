@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 // Next loads `.env.local` for the server itself; the test runner and the spec
 // must see the same values, so load it here too (without clobbering the real
-// environment). `npm run setup` writes the file. Playwright runs from the
+// environment). `bun run setup` writes the file. Playwright runs from the
 // project root, so a cwd-relative path is safe (and usable from a CJS-loaded
 // config, where `import.meta` is not).
 try {
@@ -39,7 +39,7 @@ export default defineConfig({
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: {
-    command: 'npm run start',
+    command: 'bun run start',
     url: APP_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

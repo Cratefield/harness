@@ -36,10 +36,10 @@ failing — set both as environment secrets as
 By hand, from an instance's directory:
 
 ```sh
-npx wrangler d1 migrations apply DB --remote                     # staging
-npx wrangler deploy
-npx wrangler d1 migrations apply DB --env production --remote    # production
-npx wrangler deploy --env production
+bunx wrangler d1 migrations apply DB --remote                     # staging
+bunx wrangler deploy
+bunx wrangler d1 migrations apply DB --env production --remote    # production
+bunx wrangler deploy --env production
 ../../crates/auth-worker/smoke.sh https://auth.<app-domain>
 ```
 

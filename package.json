@@ -9,9 +9,7 @@
     "node": ">=20"
   },
   "overrides": {
-    "miniflare": {
-      "sharp": "0.35.5",
-      "undici": "7.29.1"
-    }
+    "sharp": "0.35.5",
+    "undici": "7.29.1"
   }
 }

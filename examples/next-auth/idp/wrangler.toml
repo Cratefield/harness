@@ -7,7 +7,7 @@
 # a placeholder because only the local (Miniflare) database is ever used.
 #
 # The variables, including the required identity and branding keys, are
-# written to `.dev.vars` next to this file by `npm run idp`
+# written to `.dev.vars` next to this file by `bun run idp`
 # (`scripts/write-dev-vars.mjs`), together with the generated secrets.
 name = "next-auth-example-idp"
 main = "../../../crates/auth-worker/build/worker/shim.mjs"

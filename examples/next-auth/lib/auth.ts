@@ -1,7 +1,7 @@
 // The one place the Next app builds its `@cratefield/auth/next` helpers.
 //
 // Everything is read lazily: `next build` imports the route files and the
-// middleware, and the example has to build even before `npm run setup` has
+// middleware, and the example has to build even before `bun run setup` has
 // written `.env.local`. One `Auth` (with its JWKS cache) is shared for the
 // life of the process.
 
@@ -11,7 +11,7 @@ import { createNextAuth, type NextAuth } from '@cratefield/auth/next';
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {
-    throw new Error(`${name} is not set. Start the IdP and run \`npm run setup\`.`);
+    throw new Error(`${name} is not set. Start the IdP and run \`bun run setup\`.`);
   }
   return value;
 }

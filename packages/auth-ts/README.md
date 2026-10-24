@@ -13,7 +13,7 @@ Fetch, URL, TextEncoder/TextDecoder, atob/btoa, AbortSignal).
 ## Install
 
 ```sh
-npm install @cratefield/auth
+bun install @cratefield/auth
 ```
 
 ## Usage

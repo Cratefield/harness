@@ -26,38 +26,38 @@ wrangler. From the repository root:
 
 ```sh
 # 1. Build the library the example depends on.
-npm ci
-npm run build -w @cratefield/auth
+bun install --frozen-lockfile
+bun run build -w @cratefield/auth
 
 # 2. Write idp/.dev.vars (generates the secrets + signing key).
 cd examples/next-auth
-npm ci
-npm run idp
+bun install --frozen-lockfile
+bun run idp
 
 # 3. Build and start the local IdP on http://localhost:8787.
 cd idp
-npx wrangler@4.147.0 d1 migrations apply DB --local
-npx wrangler@4.147.0 dev --local --port 8787     # leave running
+bunx wrangler@4.147.0 d1 migrations apply DB --local
+bunx wrangler@4.147.0 dev --local --port 8787     # leave running
 
 # 4. Register this app's client + test user, writing .env.local.
 cd -
-npm run setup
+bun run setup
 
 # 5. Build and run the app on http://localhost:3000.
-npm run build
-npm run start                             # leave running
+bun run build
+bun run start                             # leave running
 
 # 6. Drive the whole journey in a headless Chromium.
-npx playwright install --with-deps chromium   # once
-npm run test:e2e
+bunx playwright install --with-deps chromium   # once
+bun run test:e2e
 ```
 
-Wrangler is named with its version because the repository root's `npm ci`
+Wrangler is named with its version because the repository root's `bun install`
 installs an older one (pinned by `@cloudflare/vitest-pool-workers`) whose
 runtime cannot start a Worker with the IdP's `compatibility_date`.
 
-`npm run test:e2e` starts the app itself (Playwright's `webServer`) and reuses
-an already-running `npm run start` when there is one. The IdP is started outside
+`bun run test:e2e` starts the app itself (Playwright's `webServer`) and reuses
+an already-running `bun run start` when there is one. The IdP is started outside
 Playwright, as above and in CI.
 
 ## The e2e test

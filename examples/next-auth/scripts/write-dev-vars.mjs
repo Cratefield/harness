@@ -1,7 +1,7 @@
 // Write `idp/.dev.vars` for the local IdP (`idp/wrangler.toml`).
 //
 // Generates the two shared secrets and a fresh ES256 signing key, and points
-// the Worker at this example. Run from the example root: `npm run idp`.
+// the Worker at this example. Run from the example root: `bun run idp`.
 // `.dev.vars` is gitignored; re-running rotates the signing key (which
 // invalidates existing tokens — fine for a local IdP).
 

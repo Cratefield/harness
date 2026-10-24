@@ -43,6 +43,9 @@ jobs:
       id-token: write # npm trusted publishing (OIDC) and provenance
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.6'
       # Node 24, not the 22 the other JS jobs use: trusted publishing needs
       # npm >= 11.5, which ships with Node 24. registry-url so npm resolves
       # the registry for both the publish and the OIDC handshake.
@@ -50,11 +53,11 @@ jobs:
         with:
           node-version: '24.22.1'
           registry-url: https://registry.npmjs.org
-      - run: npm ci
+      - run: bun install --frozen-lockfile
       # The workerd test leg carries its linux-x64 binary in the npm package.
-      - run: npm run typecheck -w @cratefield/auth
-      - run: npm test -w @cratefield/auth
-      - run: npm run build -w @cratefield/auth
+      - run: bun run --filter @cratefield/auth typecheck
+      - run: bun run --filter @cratefield/auth test
+      - run: bun run --filter @cratefield/auth build
       # Only a tag authorises a real publish, so it must name the version.
       - name: Tag version must match packages/auth-ts/package.json
         if: startsWith(github.ref, 'refs/tags/auth-ts-v')

@@ -4,9 +4,9 @@
 // verbatim (the Worker answers 500 with the stage and expected/got hex).
 //
 // Usage:
-//   npm install            (once; installs the pinned miniflare)
+//   bun install            (once; installs the pinned miniflare)
 //   worker-build --release (once; writes build/worker/shim.mjs)
-//   node run.mjs
+//   bun run.mjs
 import { Miniflare } from "miniflare";
 import { existsSync } from "node:fs";
 
