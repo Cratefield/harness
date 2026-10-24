@@ -27,6 +27,8 @@ mod authorize;
 /// The instance's branding (issue #777): display name, logo, accent,
 /// support address, footer and legal links, shared by every auth module.
 pub mod brand;
+mod grants;
+pub mod link_intent;
 pub use brand::Brand;
 pub use sign_in_step::{MARKER_COOKIE, SignIn, SignInStep};
 // The two items a venture author needs from the chooser: the config key
@@ -110,9 +112,9 @@ pub use store::{
     Bytes, CLIENT_CONFIDENTIAL, CLIENT_PUBLIC, CREDENTIAL_PASSKEY, CREDENTIAL_PASSWORD,
     ClientRedirectUriRow, ClientRow, CredentialRow, DELETION_DELETED_USER, DELETION_DONE,
     DELETION_NOTHING_TO_DO, DELETION_PENDING, DELETION_UNLINKED, DeletionJobRow, IdentityRow,
-    PROVIDER_APPLE, PROVIDER_GOOGLE, PROVIDER_IMPORT, PROVIDER_MAGIC_LINK, PROVIDER_META,
-    PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, STATUS_DISABLED, SessionRow,
-    SingleUseTokenRow, SsoConnectionRow, TOKEN_AUTHORIZATION_CODE, TOKEN_EMAIL_CHANGE,
+    PROVIDER_APPLE, PROVIDER_FACTORY_ZERO, PROVIDER_GOOGLE, PROVIDER_IMPORT, PROVIDER_MAGIC_LINK,
+    PROVIDER_META, PROVIDER_PASSKEY, PROVIDER_PASSWORD, Redacted, STATUS_ACTIVE, STATUS_DISABLED,
+    SessionRow, SingleUseTokenRow, SsoConnectionRow, TOKEN_AUTHORIZATION_CODE, TOKEN_EMAIL_CHANGE,
     TOKEN_EMAIL_VERIFICATION, TOKEN_MAGIC_LINK, TOKEN_PASSWORD_RESET, TOKEN_REFRESH,
     TOKEN_WEBAUTHN_CHALLENGE, UserAdminAuditRow, UserRow, client_by_id, complete_deletion_job,
     consume_single_use_token, credentials_by_user, delete_credential, delete_identity, delete_user,
@@ -373,6 +375,22 @@ const MIGRATION_SIGNUP_INTENTS: SqlMigration = SqlMigration::new(
     include_str!("../migrations/sqlite/0019_signup_intents.sql"),
 );
 
+/// Venture linking with Factory Zero (`factory-zero` identities) and the
+/// per-client authorization record `user_client_grants`. The Postgres form
+/// alters the named CHECK in place, as 0010 does.
+const MIGRATION_FACTORY_ZERO_GRANTS: SqlMigration = SqlMigration::new(
+    "0020",
+    "factory_zero_grants",
+    include_str!("../migrations/sqlite/0020_factory_zero_grants.sql"),
+);
+
+/// The Postgres form of the factory-zero migration.
+const MIGRATION_FACTORY_ZERO_GRANTS_POSTGRES: SqlMigration = SqlMigration::new(
+    "0020",
+    "factory_zero_grants",
+    include_str!("../migrations/postgres/0020_factory_zero_grants.sql"),
+);
+
 /// Router state: the module context and the resolved rotation overlap.
 pub(crate) struct ModuleState {
     pub(crate) ctx: Arc<ModuleContext>,
@@ -529,6 +547,7 @@ impl Module for AuthCore {
             "terms_acceptances",
             // Sign-up intents (one entry flow): the choice per account and client.
             "user_client_intents",
+            "user_client_grants",
         ]
     }
 
@@ -696,6 +715,16 @@ impl Module for AuthCore {
                 subject_via: None,
             },
             PersonalDataSet {
+                table: "user_client_grants",
+                subject: "user_id",
+                kind: DataKind::Identifier,
+                disposition: Disposition::Erase,
+                description: "The applications you have signed in to through this sign-in, and \
+                              when you last authorized each one.",
+                redacted: &[],
+                subject_via: None,
+            },
+            PersonalDataSet {
                 table: "step_up_transactions",
                 subject: "user_id",
                 kind: DataKind::Identifier,
@@ -771,7 +800,7 @@ impl Module for AuthCore {
     }
 
     fn migrations(&self) -> cratefield_core::Migrations {
-        const MIGRATIONS: [SqlMigration; 19] = [
+        const MIGRATIONS: [SqlMigration; 20] = [
             MIGRATION_INIT,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS,
@@ -791,6 +820,7 @@ impl Module for AuthCore {
             MIGRATION_PASSKEY_FIRST_SIGNUP,
             MIGRATION_RECOVERY_LOOKUP,
             MIGRATION_SIGNUP_INTENTS,
+            MIGRATION_FACTORY_ZERO_GRANTS,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -801,7 +831,7 @@ impl Module for AuthCore {
         // rename in the import and SSO, and the rebuild in the email
         // change) and the six portable ones reused from the sqlite files
         // unchanged (ADR 0004).
-        const MIGRATIONS_POSTGRES: [SqlMigration; 19] = [
+        const MIGRATIONS_POSTGRES: [SqlMigration; 20] = [
             MIGRATION_INIT_POSTGRES,
             MIGRATION_ROTATION,
             MIGRATION_TOKENS_POSTGRES,
@@ -821,6 +851,7 @@ impl Module for AuthCore {
             MIGRATION_PASSKEY_FIRST_SIGNUP,
             MIGRATION_RECOVERY_LOOKUP,
             MIGRATION_SIGNUP_INTENTS,
+            MIGRATION_FACTORY_ZERO_GRANTS_POSTGRES,
         ];
         // The array is the apply order; this refuses a gap, a duplicate
         // or an entry out of order at build time (issue #27).
@@ -963,6 +994,7 @@ impl Module for AuthCore {
             .with_state(Arc::clone(&state))
             .merge(clients::router(Arc::clone(&state)))
             .merge(sessions::router().with_state(Arc::clone(&state)))
+            .merge(grants::router().with_state(Arc::clone(&state)))
             .merge(authorize::router().with_state(Arc::clone(&state)))
             .merge(import::router(Arc::clone(&state)))
             .merge(sso::router(Arc::clone(&state)))
@@ -1035,6 +1067,8 @@ mod tests {
                 "terms_acceptances",
                 // Sign-up intents: the choices an account made per client.
                 "user_client_intents",
+                // Venture linking: the clients a person has authorized here.
+                "user_client_grants",
             ]
         );
         assert!(!module.public_writes());
@@ -1100,7 +1134,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn migrations_are_the_embedded_set_in_order() {
         let migrations = AuthCore::new().migrations();
-        assert_eq!(migrations.sqlite.len(), 19);
+        assert_eq!(migrations.sqlite.len(), 20);
         assert_eq!(migrations.sqlite[0].id, "0001");
         assert_eq!(migrations.sqlite[0].name, "init");
         assert_eq!(migrations.sqlite[1].id, "0002");
@@ -1139,10 +1173,12 @@ mod tests {
         assert_eq!(migrations.sqlite[17].name, "recovery_lookup");
         assert_eq!(migrations.sqlite[18].id, "0019");
         assert_eq!(migrations.sqlite[18].name, "signup_intents");
+        assert_eq!(migrations.sqlite[19].id, "0020");
+        assert_eq!(migrations.sqlite[19].name, "factory_zero_grants");
         // The Postgres set is selected wholesale (harness issue #18), so it
         // must mirror the sqlite one id-for-id: only the files whose SQL
         // truly differs carry an override, the rest are the same const.
-        assert_eq!(migrations.postgres.len(), 19);
+        assert_eq!(migrations.postgres.len(), 20);
         for (pg, sqlite) in migrations.postgres.iter().zip(migrations.sqlite) {
             assert_eq!(pg.id, sqlite.id);
             assert_eq!(pg.name, sqlite.name);

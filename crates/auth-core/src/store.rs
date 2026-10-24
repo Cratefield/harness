@@ -20,6 +20,11 @@ pub const PROVIDER_META: &str = "meta";
 pub const PROVIDER_PASSWORD: &str = "password";
 pub const PROVIDER_MAGIC_LINK: &str = "magic_link";
 pub const PROVIDER_PASSKEY: &str = "passkey";
+/// Factory Zero, the identity provider behind `auth.factory0.ventures`. A
+/// venture links a person's Factory Zero account through the same linking
+/// rules as every other upstream provider (issue #22); the subject is the
+/// `sub` Factory Zero issues.
+pub const PROVIDER_FACTORY_ZERO: &str = "factory-zero";
 /// A person moved in from a system of record (issue #650, part B). The
 /// `provider_subject` is `<external_provider>:<external_id>`, so a re-run
 /// of the same import finds the row it wrote and changes nothing.
@@ -47,6 +52,9 @@ pub const TOKEN_EMAIL_CHANGE: &str = "email_change";
 /// `single_use_tokens` bound to a session; reuse of a consumed one
 /// revokes the session.
 pub const TOKEN_REFRESH: &str = "refresh_token";
+/// The record of a Factory Zero link request that must sign in to the venture
+/// first (venture linking). Spent once, by [`crate::link_intent::spend`].
+pub(crate) const TOKEN_LINK_INTENT: &str = "link_intent";
 
 pub const CLIENT_CONFIDENTIAL: &str = "confidential";
 pub const CLIENT_PUBLIC: &str = "public";
@@ -2917,4 +2925,152 @@ pub(crate) fn insert_terms_acceptance_statement(
             now.into(),
         ]);
     Statement::render(&insert)
+}
+
+// ---------------------------------------------------------------------------
+// user_client_grants (venture linking; migration 0020)
+// ---------------------------------------------------------------------------
+
+/// One person's authorization of one client on this deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GrantRow {
+    pub user_id: String,
+    pub client_id: String,
+    pub granted_at: String,
+    pub revoked_at: Option<String>,
+}
+
+fn grant_from(row: &Row) -> GrantRow {
+    GrantRow {
+        user_id: row.get::<String>("user_id").unwrap_or_default(),
+        client_id: row.get::<String>("client_id").unwrap_or_default(),
+        granted_at: row.get::<String>("granted_at").unwrap_or_default(),
+        revoked_at: row.get::<Option<String>>("revoked_at").flatten(),
+    }
+}
+
+/// Records that `user_id` authorized `client_id` at `now`, clearing any
+/// earlier revocation: a fresh authorization is the person choosing again.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when a statement fails.
+pub(crate) async fn record_grant(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+    now: &str,
+) -> Result<(), DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("user_client_grants"))
+        .values([
+            (iden("granted_at"), now.to_owned().into()),
+            (iden("revoked_at"), Option::<String>::None.into()),
+        ])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("client_id")).eq(client_id));
+    if db.execute(&Statement::render(&update)).await? == 0 {
+        let mut insert = Query::insert();
+        insert
+            .into_table(iden("user_client_grants"))
+            .columns(["user_id", "client_id", "granted_at"])
+            .values_panic([
+                user_id.to_owned().into(),
+                client_id.to_owned().into(),
+                now.to_owned().into(),
+            ]);
+        db.execute(&Statement::render(&insert)).await?;
+    }
+    Ok(())
+}
+
+/// The grants a user has that are not revoked, oldest first.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn active_grants_by_user(
+    db: &dyn Database,
+    user_id: &str,
+) -> Result<Vec<GrantRow>, DbError> {
+    let mut select = Query::select();
+    select
+        .columns(["user_id", "client_id", "granted_at", "revoked_at"])
+        .from(iden("user_client_grants"))
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("revoked_at")).is_null())
+        .order_by(iden("granted_at"), sea_query::Order::Asc)
+        .order_by(iden("client_id"), sea_query::Order::Asc);
+    let rows = db.query(&Statement::render(&select)).await?;
+    Ok(rows.rows.iter().map(grant_from).collect())
+}
+
+/// Marks one grant revoked. Returns `0` when there is no live grant for the
+/// pair, so a second revoke, or a revoke of someone else's client, is a no-op.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn revoke_grant(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("user_client_grants"))
+        .values([(iden("revoked_at"), now.to_owned().into())])
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("client_id")).eq(client_id))
+        .and_where(Expr::col(iden("revoked_at")).is_null());
+    db.execute(&Statement::render(&update)).await
+}
+
+/// Whether a person has revoked this client's grant and not authorized it
+/// again since. A silent re-authorization must not undo that choice.
+///
+/// # Errors
+///
+/// [`DbError::Query`] when the statement fails.
+pub(crate) async fn grant_is_revoked(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+) -> Result<bool, DbError> {
+    let mut select = Query::select();
+    select
+        .columns(["revoked_at"])
+        .from(iden("user_client_grants"))
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("client_id")).eq(client_id))
+        .and_where(Expr::col(iden("revoked_at")).is_not_null());
+    let rows = db.query(&Statement::render(&select)).await?;
+    Ok(!rows.rows.is_empty())
+}
+
+/// Spends every unspent refresh token a user holds for one client, so the
+/// client can no longer exchange one for a fresh access token. Access tokens
+/// already minted are not recalled: they are short-lived and stateless, and
+/// the revoke response says so.
+///
+/// # Errors
+///
+/// [`DbError::Execute`] when the statement fails.
+pub(crate) async fn retire_refresh_tokens(
+    db: &dyn Database,
+    user_id: &str,
+    client_id: &str,
+    now: &str,
+) -> Result<u64, DbError> {
+    let mut update = Query::update();
+    update
+        .table(iden("single_use_tokens"))
+        .values([(iden("consumed_at"), now.to_owned().into())])
+        .and_where(Expr::col(iden("kind")).eq(TOKEN_REFRESH))
+        .and_where(Expr::col(iden("user_id")).eq(user_id))
+        .and_where(Expr::col(iden("client_id")).eq(client_id))
+        .and_where(Expr::col(iden("consumed_at")).is_null());
+    db.execute(&Statement::render(&update)).await
 }

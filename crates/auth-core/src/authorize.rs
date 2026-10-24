@@ -108,6 +108,14 @@ const CATALOGUE: &[(&str, &str, &str, MethodKind)] = &[
         "/v1/auth-oidc/apple/start",
         MethodKind::Redirect,
     ),
+    // Factory Zero (venture linking). Offered only where
+    // `AUTH_CORE_LOGIN_METHODS` lists it AND `AUTH_OIDC_FACTORY_ZERO_*` is set.
+    (
+        "factory-zero",
+        "Continue with Factory Zero",
+        "/v1/auth-oidc/factory-zero/start",
+        MethodKind::Redirect,
+    ),
     (
         "meta",
         "Continue with Facebook",
@@ -1653,6 +1661,20 @@ async fn authorize(
             .await
             .map_err(|_| Problem::internal())?;
     }
+    // Venture linking: a person who revoked this client's grant has said they
+    // do not want it signed in to, and a silent re-authorization would undo
+    // that. Only an explicit grant (POST /v1/auth-core/grants/{client_id})
+    // lifts the revocation. Refused the RFC 6749 way: the client gets the error.
+    if store::grant_is_revoked(&*db, &session.user_id, &query.client_id)
+        .await
+        .map_err(|_| Problem::internal())?
+    {
+        return Ok(oauth_error_redirect(
+            &query.redirect_uri,
+            "access_denied",
+            query.state.as_deref(),
+        ));
+    }
     let openid = query.scope.as_deref().is_some_and(|scope| {
         scope
             .split_ascii_whitespace()
@@ -1698,6 +1720,10 @@ async fn authorize(
         },
     )
     .await?;
+    // Venture linking: the person has now authorized this client here, so it
+    // appears in their grants list. A fresh authorization clears an earlier
+    // revocation (see grants.rs).
+    store::record_grant(&*db, &session.user_id, &query.client_id, &iso(now)).await?;
 
     tracing::info!(
         audit = true,

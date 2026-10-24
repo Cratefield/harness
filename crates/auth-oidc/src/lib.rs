@@ -41,6 +41,7 @@ pub mod apple;
 mod discovery;
 mod flow;
 mod handlers;
+mod link;
 mod provider;
 mod session;
 
@@ -137,6 +138,9 @@ pub(crate) struct Settings {
     /// from it, and it must match what the provider has registered.
     pub redirect_base: String,
     pub default_return_to: String,
+    /// The Factory Zero issuer this deployment trusts. Always one of
+    /// [`provider::FACTORY_ZERO_ISSUERS`]; anything else is a boot error.
+    pub factory_zero_issuer: String,
 }
 
 impl Settings {
@@ -205,6 +209,27 @@ fn apple_config(module: &ModuleConfig<'_>, provider: &Provider) -> Option<apple:
     })
 }
 
+/// The Factory Zero issuer this deployment trusts. The issuer is the trust
+/// anchor, so it is chosen from a fixed list and never taken from
+/// configuration as a free value. Anything else refuses to start: a misspelt
+/// or unlisted issuer must not quietly fall back to production.
+fn factory_zero_issuer(module: &ModuleConfig<'_>, problems: &mut Vec<String>) -> String {
+    match module.get_opt("FACTORY_ZERO_ISSUER") {
+        Some(raw) if !raw.trim().is_empty() => {
+            let issuer = raw.trim().to_owned();
+            if !provider::FACTORY_ZERO_ISSUERS.contains(&issuer.as_str()) {
+                problems.push(format!(
+                    "{} must be one of {}, got {issuer:?}",
+                    module.key("FACTORY_ZERO_ISSUER"),
+                    provider::FACTORY_ZERO_ISSUERS.join(", ")
+                ));
+            }
+            issuer
+        }
+        _ => provider::FACTORY_ZERO_DEFAULT_ISSUER.to_owned(),
+    }
+}
+
 fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
     let module = ModuleConfig::new("auth-oidc", cfg);
     let mut problems = Vec::new();
@@ -235,6 +260,8 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
             module.key("DEFAULT_RETURN_TO")
         ));
     }
+
+    let factory_zero_issuer = factory_zero_issuer(&module, &mut problems);
 
     // A provider with half its credentials is a deployment mistake worth
     // naming: it answers 503 at runtime and nobody will know why.
@@ -314,6 +341,7 @@ fn resolve_settings(cfg: &dyn Config) -> Result<Settings, Vec<String>> {
         Ok(Settings {
             redirect_base: trimmed,
             default_return_to,
+            factory_zero_issuer,
         })
     } else {
         Err(problems)
@@ -480,6 +508,66 @@ mod tests {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
         )
+    }
+
+    fn factory_zero_pairs(issuer: Option<&str>) -> Vec<(&'static str, &str)> {
+        let mut pairs = vec![
+            ("AUTH_OIDC_REDIRECT_BASE", "https://auth.acme.example"),
+            ("AUTH_OIDC_FACTORY_ZERO_CLIENT_ID", "venture-client"),
+            ("AUTH_OIDC_FACTORY_ZERO_CLIENT_SECRET", "secret"),
+        ];
+        if let Some(issuer) = issuer {
+            pairs.push(("AUTH_OIDC_FACTORY_ZERO_ISSUER", issuer));
+        }
+        pairs
+    }
+
+    #[test]
+    fn a_factory_zero_issuer_must_be_on_the_allowlist_or_the_module_does_not_boot() {
+        // Fails closed: an unlisted issuer, a near miss, and a trailing slash
+        // are all refused at boot, never quietly replaced with production.
+        for issuer in [
+            "https://evil.example",
+            "https://auth.factory0.ventures/",
+            "http://auth.factory0.ventures",
+            "https://auth.factory0.ventures.evil.example",
+        ] {
+            let problems = Oidc::new()
+                .validate_config(&config(&factory_zero_pairs(Some(issuer))))
+                .expect_err(issuer);
+            assert!(
+                format!("{problems:?}").contains("AUTH_OIDC_FACTORY_ZERO_ISSUER"),
+                "{issuer}: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_allowlisted_factory_zero_issuer_boots_and_the_default_is_production() {
+        for issuer in [
+            "https://auth.factory0.ventures",
+            "https://auth-staging.factory0.ventures",
+        ] {
+            assert!(
+                Oidc::new()
+                    .validate_config(&config(&factory_zero_pairs(Some(issuer))))
+                    .is_ok(),
+                "{issuer}"
+            );
+        }
+        let settings = resolve_settings(&config(&factory_zero_pairs(None))).expect("boots");
+        assert_eq!(
+            settings.factory_zero_issuer,
+            "https://auth.factory0.ventures"
+        );
+        let staging = resolve_settings(&config(&factory_zero_pairs(Some(
+            "https://auth-staging.factory0.ventures",
+        ))))
+        .expect("boots");
+        assert_eq!(
+            staging.factory_zero_issuer,
+            "https://auth-staging.factory0.ventures"
+        );
     }
 
     #[test]

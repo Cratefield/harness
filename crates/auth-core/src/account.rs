@@ -7,7 +7,7 @@
 //! path a passkey can open (see the README's sign-up section).
 
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cratefield_core::{
@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 use crate::ModuleState;
+use crate::linking::{self, UnlinkError};
 use crate::store::{self, RecoveryCodeRow, STATUS_ACTIVE};
 
 /// How many recovery codes an account is given at sign-up and each time it
@@ -554,12 +555,77 @@ async fn mark_read(
     Ok(Json(json!({ "status": "ok" })).into_response())
 }
 
+/// Refused when removing an identity would leave the account with no way in.
+pub(crate) const LAST_SIGN_IN_METHOD: cratefield_core::ProblemDef = cratefield_core::ProblemDef {
+    slug: "auth/last-sign-in-method",
+    status: axum::http::StatusCode::CONFLICT,
+    title: "Last way to sign in",
+    description: "This is the only way into the account. Add a password, a passkey, or another provider first",
+};
+
+/// `GET /identities`: the sign-in identities linked to the caller's account
+/// (Google, Apple, Factory Zero, SSO). Only the caller's own rows.
+async fn identities(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    session: crate::Session,
+) -> Result<Response, Problem> {
+    let (db, _clock, _) = db_clock_ids(&state, &scope)?;
+    let rows = store::identities_by_user(db, &session.user_id)
+        .await
+        .map_err(|_| internal(&scope))?;
+    let identities: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.id,
+                "provider": row.provider,
+                "email": row.email,
+                "created_at": row.created_at,
+                "last_login_at": row.last_login_at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "identities": identities })).into_response())
+}
+
+/// `DELETE /identities/{id}`: removes one of the caller's sign-in identities.
+///
+/// The refusal for the last way in is [`linking::unlink`]'s rule, not a
+/// second copy of it here. Another account's identity is the same answer as
+/// an unknown one. Same-origin only: a cross-site request must not be able to
+/// remove a way in.
+async fn remove_identity(
+    scope: Scope,
+    State(state): State<Arc<ModuleState>>,
+    session: crate::Session,
+    headers: HeaderMap,
+    uri: Uri,
+    Path(id): Path<String>,
+) -> Result<Response, Problem> {
+    crate::csrf::require_same_origin(&headers, &uri)
+        .map_err(|problem| problem.instance(&scope.request_id))?;
+    let (db, _clock, _) = db_clock_ids(&state, &scope)?;
+    match linking::unlink(db, &session.user_id, &id)
+        .await
+        .map_err(|_| internal(&scope))?
+    {
+        Ok(()) => Ok(Json(json!({ "status": "ok" })).into_response()),
+        Err(UnlinkError::NotFound) => Err(Problem::not_found().instance(&scope.request_id)),
+        Err(UnlinkError::LastMethod) => {
+            Err(Problem::new(&LAST_SIGN_IN_METHOD).instance(&scope.request_id))
+        }
+    }
+}
+
 pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
     axum::Router::new()
         .route("/recovery/redeem", post(redeem))
         .route("/recovery/codes", post(regenerate))
         .route("/notices", get(notices))
         .route("/notices/{id}/read", post(mark_read))
+        .route("/identities", get(identities))
+        .route("/identities/{id}", axum::routing::delete(remove_identity))
 }
 
 #[cfg(test)]
