@@ -83,6 +83,21 @@ AUTH_VENTURE_NAME = "earthos-auth"
 AUTH_CORS_ORIGINS = "https://staging.earthos.world,https://aura.earthos.world"
 AUTH_BRAND_NAME = "EarthOS"
 AUTH_BRAND_FOOTER = "EarthOS"
+# The Aura Nightforest look (EarthOS app/aura-nightforest.css, dark). No web-font
+# URL: EarthOS self-hosts its fonts and never sends browsers to a font CDN.
+AUTH_BRAND_BACKGROUND = "#080E0B"
+AUTH_BRAND_TEXT = "#EDE6D6"
+AUTH_BRAND_ACCENT = "#D4AF6A"
+AUTH_BRAND_ACCENT_TEXT = "#0A110D"
+AUTH_BRAND_DANGER = "#E8907A"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_RADIUS = "14"
+AUTH_BRAND_FONT_BODY = "Figtree, system-ui, sans-serif"
+AUTH_BRAND_FONT_DISPLAY = "Figtree, system-ui, sans-serif"
+AUTH_BRAND_FONT_MONO = "'Geist Mono', ui-monospace, Menlo, monospace"
+AUTH_BRAND_LOGO_URL = "https://earthos.world/icons/icon-192.png"
+AUTH_BRAND_PRIVACY_URL = "https://earthos.world/en/privacy"
+AUTH_BRAND_TERMS_URL = "https://earthos.world/en/terms"
 AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
 AUTH_PASSKEYS_RP_ID = "auth-staging.earthos.world"
 AUTH_PASSKEYS_ORIGINS = "https://auth-staging.earthos.world"
@@ -96,10 +111,7 @@ AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.earthos.world"
 AUTH_PASSWORD_MAIL_FROM = "EarthOS <sign-in@send.earthos.world>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.earthos.world"
 AUTH_META_REDIRECT_BASE = "https://auth-staging.earthos.world"
-# AUTH_BRAND_LOGO_URL, AUTH_BRAND_ACCENT, AUTH_BRAND_SUPPORT_EMAIL,
-# AUTH_BRAND_PRIVACY_URL and AUTH_BRAND_TERMS_URL are not set yet: EarthOS's
-# logo, accent colour, support address and privacy/terms pages still need to
-# be supplied by the app owner (see the README).
+# AUTH_BRAND_SUPPORT_EMAIL is not set: support@earthos.world does not receive mail yet.
 
 # --- Production (deployed from an `auth-v*` tag, behind the approval gate) ---
 [env.production]
@@ -130,6 +142,21 @@ AUTH_VENTURE_NAME = "earthos-auth"
 AUTH_CORS_ORIGINS = "https://earthos.world,https://aura.earthos.world"
 AUTH_BRAND_NAME = "EarthOS"
 AUTH_BRAND_FOOTER = "EarthOS"
+# The Aura Nightforest look (EarthOS app/aura-nightforest.css, dark). No web-font
+# URL: EarthOS self-hosts its fonts and never sends browsers to a font CDN.
+AUTH_BRAND_BACKGROUND = "#080E0B"
+AUTH_BRAND_TEXT = "#EDE6D6"
+AUTH_BRAND_ACCENT = "#D4AF6A"
+AUTH_BRAND_ACCENT_TEXT = "#0A110D"
+AUTH_BRAND_DANGER = "#E8907A"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_RADIUS = "14"
+AUTH_BRAND_FONT_BODY = "Figtree, system-ui, sans-serif"
+AUTH_BRAND_FONT_DISPLAY = "Figtree, system-ui, sans-serif"
+AUTH_BRAND_FONT_MONO = "'Geist Mono', ui-monospace, Menlo, monospace"
+AUTH_BRAND_LOGO_URL = "https://earthos.world/icons/icon-192.png"
+AUTH_BRAND_PRIVACY_URL = "https://earthos.world/en/privacy"
+AUTH_BRAND_TERMS_URL = "https://earthos.world/en/terms"
 AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
 AUTH_PASSKEYS_RP_ID = "earthos.world"
 AUTH_PASSKEYS_ORIGINS = "https://auth.earthos.world"
@@ -141,5 +168,4 @@ AUTH_PASSWORD_PUBLIC_BASE = "https://auth.earthos.world"
 AUTH_PASSWORD_MAIL_FROM = "EarthOS <sign-in@send.earthos.world>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth.earthos.world"
 AUTH_META_REDIRECT_BASE = "https://auth.earthos.world"
-# AUTH_BRAND_LOGO_URL, AUTH_BRAND_ACCENT, AUTH_BRAND_SUPPORT_EMAIL,
-# AUTH_BRAND_PRIVACY_URL and AUTH_BRAND_TERMS_URL: see the staging note above.
+# AUTH_BRAND_SUPPORT_EMAIL: see the staging note above.
