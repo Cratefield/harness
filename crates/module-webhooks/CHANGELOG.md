@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/Cratefield/harness/compare/cratefield-module-webhooks-v0.4.2...cratefield-module-webhooks-v0.5.0) - 2026-10-24
+
+### Other
+
+- optional signature alias header, same value as Cratefield-Signature ([#939](https://github.com/Cratefield/harness/pull/939))
+
 ## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-module-webhooks-v0.4.1...cratefield-module-webhooks-v0.4.2) - 2026-10-19
 
 ### Other
