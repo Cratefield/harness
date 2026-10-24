@@ -13,9 +13,7 @@ mod support;
 use cratefield_auth_core::{UserRow, insert_user};
 use http::StatusCode;
 use support::kit::{Kit, Res, get, kit_with, start_at};
-use support::provider::{
-    FACTORY_ZERO_CLIENT_ID, FACTORY_ZERO_CLIENT_SECRET, FACTORY_ZERO_ISSUER, TokenClaims,
-};
+use support::provider::{FACTORY_ZERO_CLIENT_ID, FACTORY_ZERO_CLIENT_SECRET, TokenClaims};
 use support::{column, count};
 
 const START: &str = "/v1/auth-oidc/factory-zero/start";
@@ -24,6 +22,12 @@ const CALLBACK: &str = "/v1/auth-oidc/factory-zero/callback";
 fn factory_zero_kit() -> Kit {
     let mut pairs = support::kit::config_pairs();
     pairs.extend([
+        // A venture sign-in the link page can offer (the Google one the kit
+        // already configures). Factory Zero itself is never offered there.
+        (
+            "AUTH_CORE_LOGIN_METHODS".to_owned(),
+            "google,factory-zero".to_owned(),
+        ),
         (
             "AUTH_OIDC_FACTORY_ZERO_CLIENT_ID".to_owned(),
             FACTORY_ZERO_CLIENT_ID.to_owned(),
@@ -204,7 +208,156 @@ fn a_token_minted_for_another_client_is_refused() {
     });
 }
 
+/// The resume token a link page carries, read out of one of its sign-in
+/// links: the link's `return_to` is the resumed `/start`, percent-encoded.
+fn resume_token(page: &str) -> String {
+    let start = page.find("return_to=").expect("a sign-in link") + "return_to=".len();
+    let end = start + page[start..].find('"').expect("the link ends");
+    let resumed = percent_decode(&page[start..end]);
+    resumed
+        .split("resume=")
+        .nth(1)
+        .expect("the resumed start names a token")
+        .to_owned()
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).expect("ascii");
+            out.push(u8::from_str_radix(hex, 16).expect("hex"));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("utf-8")
+}
+
+/// The link page: nobody is signed in to the venture yet.
+async fn start_link_without_session(kit: &Kit) -> Res {
+    get(kit, &format!("{START}?intent=link"), &[]).await
+}
+
 #[test]
-fn the_factory_zero_issuer_is_the_pinned_one() {
-    assert_eq!(FACTORY_ZERO_ISSUER, "https://auth.factory0.ventures");
+fn a_link_without_a_venture_session_shows_sign_in_first_and_links_nothing() {
+    // The guard: a link request never falls through to the plain sign-in
+    // rules. No session means no redirect to Factory Zero, no flow, no
+    // identity, and no account.
+    pollster::block_on(async {
+        let kit = factory_zero_kit();
+        let response = start_link_without_session(&kit).await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text());
+        assert!(response.location().is_none(), "redirected to a provider");
+        assert!(
+            response.cookie("__Host-auth_oidc").is_none(),
+            "started a flow"
+        );
+        assert!(response.text().contains("Sign in to this service first"));
+        assert!(
+            !response.text().contains("Continue with Factory Zero"),
+            "offered Factory Zero as a sign-in"
+        );
+        // The resume token rides in the sign-in links; the next test reads it.
+        assert!(response.text().contains("return_to="), "no sign-in link");
+        assert_eq!(count(&kit, "users"), 0);
+        assert_eq!(count(&kit, "identities"), 0);
+    });
+}
+
+#[test]
+fn a_link_resumes_after_the_venture_sign_in_and_is_single_use() {
+    pollster::block_on(async {
+        let kit = factory_zero_kit();
+        let token = resume_token(&start_link_without_session(&kit).await.text());
+
+        // The person signs in to the venture (here: through Factory Zero's
+        // own sign-in, which leaves a live venture session behind).
+        let session = sign_in(&kit).await;
+        let cookie = session.cookie("__Host-session").expect("a venture session");
+
+        let resume = format!("{START}?intent=link&resume={token}");
+        let resumed = get(&kit, &resume, &[("__Host-session", &cookie)]).await;
+        assert_eq!(resumed.status, StatusCode::FOUND, "{}", resumed.text());
+        assert!(
+            resumed
+                .location()
+                .is_some_and(|l| l.starts_with("https://auth.factory0.ventures")),
+            "the link did not continue to Factory Zero"
+        );
+        assert!(
+            resumed.cookie("__Host-auth_oidc").is_some(),
+            "no flow cookie"
+        );
+
+        // Spent: the same token cannot start a second link.
+        let again = get(&kit, &resume, &[("__Host-session", &cookie)]).await;
+        assert_eq!(again.status, StatusCode::BAD_REQUEST, "{}", again.text());
+        assert!(again.location().is_none());
+        assert!(again.cookie("__Host-auth_oidc").is_none());
+    });
+}
+
+#[test]
+fn a_link_token_expires() {
+    pollster::block_on(async {
+        let kit = factory_zero_kit();
+        let token = resume_token(&start_link_without_session(&kit).await.text());
+        let cookie = sign_in(&kit)
+            .await
+            .cookie("__Host-session")
+            .expect("a venture session");
+
+        kit.clock.advance_secs(601);
+        let late = get(
+            &kit,
+            &format!("{START}?intent=link&resume={token}"),
+            &[("__Host-session", &cookie)],
+        )
+        .await;
+        assert_eq!(late.status, StatusCode::BAD_REQUEST, "{}", late.text());
+        assert!(late.location().is_none());
+    });
+}
+
+#[test]
+fn a_link_token_is_not_honoured_for_another_provider() {
+    pollster::block_on(async {
+        let kit = factory_zero_kit();
+        let token = resume_token(&start_link_without_session(&kit).await.text());
+        let cookie = sign_in(&kit)
+            .await
+            .cookie("__Host-session")
+            .expect("a venture session");
+
+        let other = get(
+            &kit,
+            &format!("/v1/auth-oidc/google/start?intent=link&resume={token}"),
+            &[("__Host-session", &cookie)],
+        )
+        .await;
+        assert_eq!(other.status, StatusCode::BAD_REQUEST, "{}", other.text());
+    });
+}
+
+#[test]
+fn a_live_session_can_link_directly() {
+    pollster::block_on(async {
+        let kit = factory_zero_kit();
+        let cookie = sign_in(&kit)
+            .await
+            .cookie("__Host-session")
+            .expect("a venture session");
+        let direct = get(
+            &kit,
+            &format!("{START}?intent=link"),
+            &[("__Host-session", &cookie)],
+        )
+        .await;
+        assert_eq!(direct.status, StatusCode::FOUND, "{}", direct.text());
+    });
 }

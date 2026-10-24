@@ -52,6 +52,9 @@ pub const TOKEN_EMAIL_CHANGE: &str = "email_change";
 /// `single_use_tokens` bound to a session; reuse of a consumed one
 /// revokes the session.
 pub const TOKEN_REFRESH: &str = "refresh_token";
+/// The record of a Factory Zero link request that must sign in to the venture
+/// first (venture linking). Spent once, by [`crate::link_intent::spend`].
+pub(crate) const TOKEN_LINK_INTENT: &str = "link_intent";
 
 pub const CLIENT_CONFIDENTIAL: &str = "confidential";
 pub const CLIENT_PUBLIC: &str = "public";

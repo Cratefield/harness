@@ -28,6 +28,7 @@ mod authorize;
 /// support address, footer and legal links, shared by every auth module.
 pub mod brand;
 mod grants;
+pub mod link_intent;
 pub use brand::Brand;
 pub use sign_in_step::{MARKER_COOKIE, SignIn, SignInStep};
 // The two items a venture author needs from the chooser: the config key

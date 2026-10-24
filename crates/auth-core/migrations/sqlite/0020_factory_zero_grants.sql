@@ -48,3 +48,27 @@ CREATE TABLE IF NOT EXISTS user_client_grants (
     revoked_at TEXT,
     PRIMARY KEY (user_id, client_id)
 );
+
+-- 3. single_use_tokens admits 'link_intent': the short-lived, single-use
+--    record of "this person asked to link Factory Zero, and must sign in to
+--    the venture first" (see crates/auth-oidc, the start route). Rebuilt
+--    the same way 0009 did it, because SQLite cannot ALTER a CHECK.
+CREATE TABLE IF NOT EXISTS single_use_tokens_rebuild (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('magic_link','webauthn_challenge','authorization_code','refresh_token','email_verification','password_reset','email_change','link_intent')),
+    token_hash BLOB NOT NULL UNIQUE,
+    user_id TEXT,
+    client_id TEXT,
+    payload TEXT,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+);
+
+INSERT INTO single_use_tokens_rebuild (id, kind, token_hash, user_id, client_id, payload, expires_at, consumed_at)
+    SELECT id, kind, token_hash, user_id, client_id, payload, expires_at, consumed_at
+    FROM single_use_tokens;
+
+DROP TABLE single_use_tokens;
+ALTER TABLE single_use_tokens_rebuild RENAME TO single_use_tokens;
+
+CREATE INDEX IF NOT EXISTS idx_single_use_tokens_expires_at ON single_use_tokens (expires_at);

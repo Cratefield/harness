@@ -102,6 +102,16 @@ impl TokenAuth {
 }
 
 impl Provider {
+    /// This descriptor with the deployment's issuer. Only Factory Zero has
+    /// one that varies; the caller has already checked the issuer against
+    /// [`FACTORY_ZERO_ISSUERS`].
+    pub(crate) fn with_issuer(&self, issuer: &str) -> Self {
+        Self {
+            issuer: Cow::Owned(issuer.to_owned()),
+            ..self.clone()
+        }
+    }
+
     /// Whether this provider answers on the cross-site `POST` callback.
     pub(crate) fn is_form_post(&self) -> bool {
         matches!(self.response_mode, ResponseMode::FormPost)
@@ -139,16 +149,31 @@ pub const APPLE: Provider = Provider {
     auth_type: TokenAuth::RequestBody,
 };
 
-/// Factory Zero (`auth.factory0.ventures`), a Cratefield auth server.
+/// The Factory Zero issuers this service will trust, production first.
+///
+/// A deployment picks one with `AUTH_OIDC_FACTORY_ZERO_ISSUER`, and any value
+/// outside this list fails at boot. Adding an issuer is a reviewed change
+/// here, not a configuration value: the issuer is the trust anchor, and an
+/// operator may choose between these two and no others.
+pub(crate) const FACTORY_ZERO_ISSUERS: &[&str] = &[
+    "https://auth.factory0.ventures",
+    "https://auth-staging.factory0.ventures",
+];
+
+/// The issuer a deployment uses when `AUTH_OIDC_FACTORY_ZERO_ISSUER` is unset.
+pub(crate) const FACTORY_ZERO_DEFAULT_ISSUER: &str = FACTORY_ZERO_ISSUERS[0];
+
+/// Factory Zero (`auth.factory0.ventures` or its staging twin), a Cratefield
+/// auth server.
 ///
 /// Its ID tokens are ES256 (`cratefield-auth-core` mints ES256 only), so
 /// the algorithm is pinned to ES256 here, and an RS256 or HS256 token from
-/// anything claiming this issuer is refused. The issuer is fixed: an
-/// operator can only point the client credentials somewhere else, never
-/// the trust anchor.
+/// anything claiming this issuer is refused. The issuer in this const is the
+/// production default; a deployment's own issuer is applied with
+/// [`Provider::with_issuer`], and only from [`FACTORY_ZERO_ISSUERS`].
 pub(crate) const FACTORY_ZERO: Provider = Provider {
     slug: PROVIDER_FACTORY_ZERO,
-    issuer: Cow::Borrowed("https://auth.factory0.ventures"),
+    issuer: Cow::Borrowed(FACTORY_ZERO_DEFAULT_ISSUER),
     scopes: &["email", "profile"],
     config: "FACTORY_ZERO",
     label: "Factory Zero",

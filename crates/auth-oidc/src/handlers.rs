@@ -33,6 +33,7 @@ use std::sync::Arc;
 use crate::apple;
 use crate::discovery::{PortHttpClient, key_id_of};
 use crate::flow::{self, Flow};
+use crate::link;
 use crate::provider::{self, Provider};
 use crate::session::{self, Completed, Identity};
 use crate::{
@@ -75,6 +76,12 @@ pub(crate) fn router() -> axum::Router<Arc<ModuleState>> {
 #[derive(Debug, Deserialize)]
 pub(crate) struct StartQuery {
     return_to: Option<String>,
+    /// `link`: attach this provider to the venture session the person
+    /// already has (venture linking). Without one, the person signs in
+    /// first, and the link resumes through `resume`.
+    intent: Option<String>,
+    /// The signed token a resumed link carries (see [`crate::link`]).
+    resume: Option<String>,
 }
 
 /// The authorization response, however it arrived.
@@ -162,8 +169,100 @@ async fn limit(state: &ModuleState, headers: &HeaderMap) -> Option<Response> {
     None
 }
 
-fn provider_of(slug: &str) -> Result<&'static Provider, Problem> {
-    provider::by_slug(slug).ok_or_else(Problem::not_found)
+/// The descriptor a request names, with this deployment's issuer applied.
+///
+/// Only Factory Zero's issuer varies, and the settings have already checked
+/// it against the fixed list, so an unlisted issuer never reaches a request.
+fn provider_of(state: &ModuleState, slug: &str) -> Result<Provider, Problem> {
+    let found = provider::by_slug(slug).ok_or_else(Problem::not_found)?;
+    match state.settings.as_ref() {
+        Some(settings) if found.slug == cratefield_auth_core::PROVIDER_FACTORY_ZERO => {
+            Ok(found.with_issuer(&settings.factory_zero_issuer))
+        }
+        _ => Ok(found.clone()),
+    }
+}
+
+/// Percent-encodes everything but the RFC 3986 unreserved set, so a token
+/// can ride in a `return_to` query without being read as parameters.
+fn percent_encode(value: &str) -> String {
+    use std::fmt::Write as _;
+    value
+        .bytes()
+        .fold(String::with_capacity(value.len()), |mut out, byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                out.push(char::from(byte));
+            } else {
+                let _ = write!(out, "%{byte:02X}");
+            }
+            out
+        })
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// The page a link request gets when nobody is signed in to the venture.
+///
+/// It offers the venture's own sign-in (the methods the deployment lists),
+/// each carrying a return to the resumed link, so the link continues the
+/// moment the person is signed in. Factory Zero itself is left out: signing
+/// in with it here would be a plain sign-in, not a link.
+fn sign_in_first(state: &ModuleState, resume: &str) -> Response {
+    let links: Vec<String> = cratefield_auth_core::sign_in_links(&*state.ctx.config, resume)
+        .into_iter()
+        .filter(|(_, href)| !href.contains("/factory-zero/"))
+        .map(|(label, href)| {
+            format!(
+                "<p><a href=\"{}\">{}</a></p>",
+                escape_html(&href),
+                escape_html(&label)
+            )
+        })
+        .collect();
+    let body = if links.is_empty() {
+        "<p>Sign in to this service before linking Factory Zero. No sign-in method is offered here, so the link cannot be started.</p>".to_owned()
+    } else {
+        format!(
+            "<p>Sign in to this service first. Factory Zero is linked to the account you sign in to.</p>{}",
+            links.concat()
+        )
+    };
+    page(StatusCode::OK, &body)
+}
+
+/// Spends the link intent a resumed link carries. `false` when the token
+/// does not name a live intent for this provider, or the intent was already
+/// spent. Either way the link does not proceed.
+async fn spend_resume(state: &ModuleState, provider: &Provider, token: &str) -> bool {
+    let ctx = state.ctx.as_ref();
+    let (Some(db), Some(clock), Some(signer)) = (
+        ctx.ports.db.as_deref(),
+        ctx.ports.clock.as_deref(),
+        ctx.ports.signer.as_deref(),
+    ) else {
+        return false;
+    };
+    match link::open(signer, clock, provider.slug, token) {
+        Some(id) => cratefield_auth_core::link_intent::spend(db, clock, &id)
+            .await
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
+/// The page a link that cannot be spent gets. Nothing is started.
+fn link_expired() -> Response {
+    page(
+        StatusCode::BAD_REQUEST,
+        "This link to Factory Zero has expired or was already used. Start it again from the account page.",
+    )
 }
 
 /// Builds the provider client. The concrete type is not nameable without
@@ -193,7 +292,7 @@ async fn start(
     if let Some(limited) = limit(&state, &headers).await {
         return Ok(limited);
     }
-    let provider = provider_of(&slug)?;
+    let provider = provider_of(&state, &slug)?;
     let settings = state.settings()?;
     let ctx = state.ctx.as_ref();
     let (Some(http), Some(clock), Some(signer)) = (
@@ -203,16 +302,6 @@ async fn start(
     ) else {
         return Err(Problem::not_ready("auth-oidc needs http, clock and signer"));
     };
-    let config = state.provider_config(provider, clock)?;
-
-    let metadata = state
-        .discovery
-        .metadata(provider, http, clock, false)
-        .await
-        .map_err(|err| {
-            tracing::error!(error = %err, "provider discovery failed");
-            unavailable(&scope)
-        })?;
 
     // Who is signed in *now*. `/start` is same-site, so the session cookie
     // arrives here even for a provider whose callback will not carry it.
@@ -232,9 +321,60 @@ async fn start(
         (Some(session.user_id), Some(session.id))
     });
 
+    // A link (venture linking) attaches to a live venture session, and never
+    // falls through to the plain sign-in rules without one. With no session,
+    // the person is shown the venture's sign-in and the link is resumed from
+    // a single-use token after it. A plain sign-in (no intent) is unchanged.
+    if query.intent.as_deref() == Some(link::INTENT_LINK) {
+        match (&signed_in_user, query.resume.as_deref()) {
+            (None, _) => {
+                let (Some(db), Some(id_token)) = (ctx.ports.db.as_deref(), random_token()) else {
+                    return Err(Problem::internal().instance(&scope.request_id));
+                };
+                cratefield_auth_core::link_intent::issue(db, clock, &id_token)
+                    .await
+                    .map_err(|err| {
+                        tracing::error!(error = %err, "could not record the link intent");
+                        Problem::internal().instance(&scope.request_id)
+                    })?;
+                let token = link::seal(
+                    signer,
+                    &id_token,
+                    provider.slug,
+                    clock.now().unix_timestamp(),
+                );
+                let resume = format!(
+                    "/v1/auth-oidc/{}/start?intent={}&resume={}",
+                    provider.slug,
+                    link::INTENT_LINK,
+                    percent_encode(&token)
+                );
+                return Ok(sign_in_first(&state, &resume));
+            }
+            (Some(_), Some(token)) => {
+                if !spend_resume(&state, &provider, token).await {
+                    return Ok(link_expired());
+                }
+            }
+            // A live session asked for the link directly: no resume to spend.
+            (Some(_), None) => {}
+        }
+    }
+
+    let config = state.provider_config(&provider, clock)?;
+
+    let metadata = state
+        .discovery
+        .metadata(&provider, http, clock, false)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, "provider discovery failed");
+            unavailable(&scope)
+        })?;
+
     let (url, flow) = begin(
         &scope,
-        provider,
+        &provider,
         &config,
         Begin {
             metadata,
@@ -251,7 +391,7 @@ async fn start(
     Ok(redirect_response(
         &flow.seal(signer),
         url,
-        flow::SameSite::for_provider(provider),
+        flow::SameSite::for_provider(&provider),
     ))
 }
 
@@ -361,14 +501,14 @@ async fn callback(
     Path(slug): Path<String>,
     Query(query): Query<CallbackParams>,
 ) -> Result<Response, Problem> {
-    let provider = provider_of(&slug)?;
+    let provider = provider_of(&state, &slug)?;
     if provider.is_form_post() {
         // Apple posts. A GET here is somebody poking at the route, and
         // answering it would mean accepting an authorization response
         // through a path this provider never uses.
         return Err(Problem::not_found());
     }
-    complete_callback(state, scope, headers, provider, query).await
+    complete_callback(state, scope, headers, &provider, query).await
 }
 
 /// The `form_post` callback: Apple only (#3, #16).
@@ -384,7 +524,7 @@ async fn callback_form(
     Path(slug): Path<String>,
     body: String,
 ) -> Result<Response, Problem> {
-    let provider = provider_of(&slug)?;
+    let provider = provider_of(&state, &slug)?;
     if !provider.is_form_post() {
         return Err(Problem::not_found());
     }
@@ -401,7 +541,7 @@ async fn callback_form(
     let Ok(params) = serde_urlencoded::from_str::<CallbackParams>(&body) else {
         return Ok(expired_page());
     };
-    complete_callback(state, scope, headers, provider, params).await
+    complete_callback(state, scope, headers, &provider, params).await
 }
 
 #[allow(clippy::too_many_lines)]
@@ -409,7 +549,7 @@ async fn complete_callback(
     state: Arc<ModuleState>,
     scope: Scope,
     headers: HeaderMap,
-    provider: &'static Provider,
+    provider: &Provider,
     query: CallbackParams,
 ) -> Result<Response, Problem> {
     if let Some(limited) = limit(&state, &headers).await {

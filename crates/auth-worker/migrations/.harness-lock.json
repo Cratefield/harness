@@ -75,6 +75,10 @@
     "file": "0023_auth-core_0019_signup_intents.sql",
     "sha256": "8a858361ff2edcb30c351ead398c8e1ae1e9edc0bca22f989fac0458e3a0a81b"
   },
+  "auth-core/0020": {
+    "file": "0024_auth-core_0020_factory_zero_grants.sql",
+    "sha256": "ee3b408f4f55fc920d4bd7d778df3f36d3613daddbd1a73587dcd09a79a7c9e3"
+  },
   "auth-magic-link/0001": {
     "file": "0012_auth-magic-link_0001_send_cooldown.sql",
     "sha256": "7b13e4aaade1989e990a26c4a6ae4a9ef12fa23131b3f6c02caa3a4b15f73313"
@@ -90,9 +94,5 @@
   "auth-passkeys/0003": {
     "file": "0022_auth-passkeys_0003_offer_dismissals.sql",
     "sha256": "9b217fd9160798c57b7f998a0cea7caea6111ef42db3e7869edb0065b38d25bd"
-  },
-  "auth-core/0020": {
-    "file": "0024_auth-core_0020_factory_zero_grants.sql",
-    "sha256": "f5b5a83ce40bfa0452f9d1b79771696d8822904a410c16c83be44c33e803f3d6"
   }
 }
