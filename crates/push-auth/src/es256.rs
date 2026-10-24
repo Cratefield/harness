@@ -75,7 +75,7 @@ impl Es256Signer {
     /// form VAPID sends as `k=` and a JWKS splits into `x`/`y`.
     #[must_use]
     pub fn public_key_uncompressed(&self) -> [u8; 65] {
-        let point = self.key.verifying_key().to_encoded_point(false);
+        let point = self.key.verifying_key().to_sec1_point(false);
         let mut out = [0u8; 65];
         // An uncompressed P-256 point is always 65 bytes.
         out.copy_from_slice(point.as_bytes());

@@ -25,7 +25,7 @@ use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_S
 use hkdf::Hkdf;
 use p256::PublicKey;
 use p256::SecretKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -310,7 +310,7 @@ fn key_info(ua_public: &[u8; PUBLIC_KEY_LEN], as_public: &[u8; PUBLIC_KEY_LEN]) 
 /// RFC 8291 §3.1–§3.3: ECDH, then combine with the authentication secret.
 fn schedule(keys: &SubscriptionKeys, as_private: &[u8; 32]) -> Result<Schedule, EceError> {
     let as_secret = SecretKey::from_slice(as_private).map_err(|_| EceError::ServerKey)?;
-    let encoded = as_secret.public_key().to_encoded_point(false);
+    let encoded = as_secret.public_key().to_sec1_point(false);
     let mut as_public = [0u8; PUBLIC_KEY_LEN];
     // An uncompressed P-256 point is always 65 bytes.
     as_public.copy_from_slice(encoded.as_bytes());
