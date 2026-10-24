@@ -95,7 +95,22 @@ AUTH_META_REDIRECT_BASE = "https://auth-staging.ledgers.sh"
 TURNSTILE_SITE_KEY = "LEDGERS_TURNSTILE_SITE_KEY"
 AUTH_TURNSTILE_HOSTNAME = "auth-staging.ledgers.sh"
 AUTH_BRAND_LOGO_URL = "https://ledgers.sh/assets/icon-512.png"
-AUTH_BRAND_ACCENT = "#E9B44C"
+AUTH_BRAND_ACCENT = "#7FA6C9"
+# Ledgers' app palette (dark). The accent is the Ledgers "agent" blue, for
+# links and focus rings; the primary button is the app's .btn-primary
+# (text on background), not the accent.
+AUTH_BRAND_BACKGROUND = "#0F1217"
+AUTH_BRAND_SURFACE = "#151920"
+AUTH_BRAND_LINE = "#252B34"
+AUTH_BRAND_TEXT = "#E4E7EB"
+AUTH_BRAND_MUTED = "#B8C0CA"
+AUTH_BRAND_PRIMARY = "#E4E7EB"
+AUTH_BRAND_PRIMARY_TEXT = "#0F1217"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_FONT_BODY = "'Source Sans 3', system-ui, -apple-system, 'Segoe UI', sans-serif"
+AUTH_BRAND_FONT_DISPLAY = "'Source Sans 3', system-ui, -apple-system, 'Segoe UI', sans-serif"
+AUTH_BRAND_FONT_MONO = "'Source Code Pro', ui-monospace, SFMono-Regular, Menlo, monospace"
+AUTH_BRAND_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500&display=swap"
 # needs-human: no Ledgers support address, privacy or terms URL exists yet;
 # add AUTH_BRAND_SUPPORT_EMAIL, AUTH_BRAND_PRIVACY_URL and AUTH_BRAND_TERMS_URL
 # (both environments) once the pages exist on ledgers.sh.
@@ -145,6 +160,21 @@ AUTH_META_REDIRECT_BASE = "https://auth.ledgers.sh"
 TURNSTILE_SITE_KEY = "LEDGERS_TURNSTILE_SITE_KEY"
 AUTH_TURNSTILE_HOSTNAME = "auth.ledgers.sh"
 AUTH_BRAND_LOGO_URL = "https://ledgers.sh/assets/icon-512.png"
-AUTH_BRAND_ACCENT = "#E9B44C"
+AUTH_BRAND_ACCENT = "#7FA6C9"
+# Ledgers' app palette (dark). The accent is the Ledgers "agent" blue, for
+# links and focus rings; the primary button is the app's .btn-primary
+# (text on background), not the accent.
+AUTH_BRAND_BACKGROUND = "#0F1217"
+AUTH_BRAND_SURFACE = "#151920"
+AUTH_BRAND_LINE = "#252B34"
+AUTH_BRAND_TEXT = "#E4E7EB"
+AUTH_BRAND_MUTED = "#B8C0CA"
+AUTH_BRAND_PRIMARY = "#E4E7EB"
+AUTH_BRAND_PRIMARY_TEXT = "#0F1217"
+AUTH_BRAND_SCHEME = "dark"
+AUTH_BRAND_FONT_BODY = "'Source Sans 3', system-ui, -apple-system, 'Segoe UI', sans-serif"
+AUTH_BRAND_FONT_DISPLAY = "'Source Sans 3', system-ui, -apple-system, 'Segoe UI', sans-serif"
+AUTH_BRAND_FONT_MONO = "'Source Code Pro', ui-monospace, SFMono-Regular, Menlo, monospace"
+AUTH_BRAND_FONT_CSS_URL = "https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500&display=swap"
 # needs-human: no Ledgers support address, privacy or terms URL exists yet
 # (Meta's app review needs the privacy URL). Add them once the pages exist.

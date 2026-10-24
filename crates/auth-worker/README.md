@@ -65,6 +65,11 @@ validated at boot, because each is written into the pages' `<style>`.
 | `AUTH_BRAND_FONT_DISPLAY` | Heading font stack | the body stack |
 | `AUTH_BRAND_FONT_MONO` | Label and code font stack | the system monospace stack |
 | `AUTH_BRAND_FONT_CSS_URL` | `https` stylesheet that loads those fonts (Google Fonts, say) | no web fonts |
+| `AUTH_BRAND_PRIMARY` | Background of the primary button (the page's main action) | the accent |
+| `AUTH_BRAND_PRIMARY_TEXT` | Label colour on the primary button (`AUTH_BRAND_ACCENT_TEXT` is its older name) | black or white, whichever reads on the primary |
+| `AUTH_BRAND_SURFACE` | Cards, inputs and secondary buttons | mixed from background and text |
+| `AUTH_BRAND_LINE` | Borders and rules | mixed from background and text |
+| `AUTH_BRAND_MUTED` | Secondary text | mixed from background and text |
 
 Surfaces, borders and muted text are mixed from the background and text
 colours, so a two-colour brand needs only those two. The sign-in mail is

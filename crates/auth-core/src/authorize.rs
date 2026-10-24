@@ -95,12 +95,7 @@ pub(crate) enum MethodKind {
 /// and offering it is still `AUTH_CORE_LOGIN_METHODS`'s decision. That is
 /// what lets a provider be added here and implemented separately.
 const CATALOGUE: &[(&str, &str, &str, MethodKind)] = &[
-    (
-        "passkey",
-        "Continue with a passkey",
-        "",
-        MethodKind::Passkey,
-    ),
+    ("passkey", "Sign in with a passkey", "", MethodKind::Passkey),
     (
         "google",
         "Continue with Google",
@@ -2148,7 +2143,7 @@ mod tests {
             brand: test_brand(),
             methods: vec![LoginMethod {
                 slug: "passkey".to_owned(),
-                label: "Continue with a passkey".to_owned(),
+                label: "Sign in with a passkey".to_owned(),
                 href: String::new(),
                 is_passkey: true,
             }],
@@ -2222,6 +2217,82 @@ mod tests {
             page.contains("&#34;") || page.contains("&quot;"),
             "the double quote should be escaped inside the attribute: {page}"
         );
+    }
+
+    /// Renders the chooser with the given shape, for the order tests.
+    fn chooser_page(has_passkey: bool, has_email: bool, hint: Option<&str>) -> String {
+        LoginChooserTemplate {
+            brand: test_brand(),
+            methods: Vec::new(),
+            has_passkey,
+            has_email,
+            registration_open: true,
+            hint: hint.map(str::to_owned),
+            return_to: "/authorize?state=x".to_owned(),
+            return_to_without_hint: "/authorize?state=x".to_owned(),
+            turnstile_widget: has_email
+                .then(|| crate::page::turnstile_widget("0x-key", "magic-link", "dark")),
+            turnstile_script: None,
+        }
+        .render()
+        .expect("renders")
+    }
+
+    /// The Continue screen reads top to bottom as one decision: the passkey
+    /// first and alone, then the divider, then the email path with the
+    /// Turnstile widget inside it, right above its button.
+    #[test]
+    fn the_passkey_comes_first_then_the_divider_then_the_email_section() {
+        let page = chooser_page(true, true, None);
+        let title = page.find("<h1>Sign in</h1>").expect("title");
+        let passkey = page.find("id=\"cf-passkey\"").expect("passkey button");
+        let divider = page.find("id=\"cf-or\"").expect("divider");
+        let section = page.find("class=\"cf-email\"").expect("email section");
+        let form = page.find("id=\"cf-continue\"").expect("email form");
+        let widget = page.find("class=\"cf-turnstile\"").expect("widget");
+        let button = page.find("Email me a sign-in link").expect("email button");
+        assert!(title < passkey, "title after the passkey: {page}");
+        assert!(passkey < divider, "divider before the passkey: {page}");
+        assert!(
+            divider < section,
+            "email section before the divider: {page}"
+        );
+        assert!(
+            section < form && form < widget,
+            "widget outside the email form: {page}"
+        );
+        assert!(widget < button, "widget below its button: {page}");
+        assert!(page.contains("Sign in with a passkey"), "{page}");
+        assert!(!page.contains("Continue with a passkey"), "{page}");
+        // The one primary action is the passkey; the email button is secondary.
+        assert!(
+            page.contains("class=\"cf-secondary\" type=\"submit\""),
+            "{page}"
+        );
+    }
+
+    /// Without a passkey there is no competing action: the email button is
+    /// the primary one and there is no divider.
+    #[test]
+    fn with_no_passkey_the_email_button_is_the_primary_action() {
+        let page = chooser_page(false, true, None);
+        assert!(!page.contains("id=\"cf-or\""), "{page}");
+        assert!(!page.contains("cf-passkey"), "{page}");
+        assert!(
+            page.contains("class=\"cf-primary\" type=\"submit\""),
+            "{page}"
+        );
+    }
+
+    /// A login hint skips the address field but the passkey stays primary.
+    #[test]
+    fn a_login_hint_skips_the_field_and_keeps_the_passkey_first() {
+        let page = chooser_page(true, true, Some("ada@example.com"));
+        assert!(!page.contains("id=\"cf-email\""), "{page}");
+        assert!(page.contains("Signing in as"), "{page}");
+        let passkey = page.find("id=\"cf-passkey\"").expect("passkey");
+        let section = page.find("class=\"cf-email\"").expect("email section");
+        assert!(passkey < section, "{page}");
     }
 
     #[test]

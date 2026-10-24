@@ -99,9 +99,17 @@ pub fn chooser_turnstile_csp(font_css_url: Option<&str>, logo_url: Option<&str>)
         .and_then(|url| cratefield_core::origin_of(url).ok())
         .map(|origin| format!(" {origin}"))
         .unwrap_or_default();
+    // A font stylesheet names its files on Google's font host, which
+    // `default-src 'none'` would otherwise refuse (the stylesheet loads and
+    // the glyphs do not).
+    let font_files = if font_css_url.is_some() {
+        " font-src 'self' https://fonts.gstatic.com;"
+    } else {
+        ""
+    };
     with_logo(
         format!(
-            "default-src 'none'; style-src 'self' 'unsafe-inline'{fonts}; \
+            "default-src 'none'; style-src 'self' 'unsafe-inline'{fonts};{font_files} \
              script-src 'self' 'unsafe-inline' {origin}; connect-src 'self' {origin}; \
              frame-src {origin}; img-src 'self' data:; form-action 'self'; base-uri 'none'; \
              frame-ancestors 'none'"
@@ -541,6 +549,24 @@ mod tests {
         let html = turnstile_widget("a\"b<c", "x", "light");
         assert!(html.contains("data-sitekey=\"a&quot;b&lt;c\""), "{html}");
         assert!(html.contains("data-theme=\"light\""), "{html}");
+    }
+
+    #[test]
+    fn the_chooser_policy_opens_a_font_stylesheets_files_only_when_it_names_one() {
+        let plain = chooser_turnstile_csp(None, None);
+        assert!(!plain.contains("font-src"), "{plain}");
+        let fonts = chooser_turnstile_csp(
+            Some("https://fonts.googleapis.com/css2?family=Source+Sans+3"),
+            None,
+        );
+        assert!(
+            fonts.contains("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;"),
+            "{fonts}"
+        );
+        assert!(
+            fonts.contains("font-src 'self' https://fonts.gstatic.com;"),
+            "{fonts}"
+        );
     }
 
     #[test]

@@ -29,7 +29,11 @@ Every passkey origin is the RP ID or a subdomain of it, as WebAuthn requires.
 **Status:** not provisioned. Both D1 ids are placeholders, so
 `deploy-auth.yml` skips this instance on every run. No D1, secrets, Owlpost
 domain, Turnstile site or custom domains exist yet. Branding uses the
-Ledgers logo (`https://ledgers.sh/assets/icon-512.png`) and accent `#E9B44C`.
+Ledgers logo (`https://ledgers.sh/assets/icon-512.png`), the Ledgers app's dark
+palette (background `#0F1217`, surface `#151920`, line `#252B34`, text `#E4E7EB`,
+muted `#B8C0CA`; the primary button is `#E4E7EB` with `#0F1217` text; the accent
+`#7FA6C9` is for links and focus rings) and Source Sans 3 / Source Code Pro from
+Google Fonts (`AUTH_BRAND_FONT_CSS_URL`).
 Support address, privacy and terms URLs are not set yet (no pages exist), so
 they are commented out (`needs-human` in `wrangler.toml`). Staging sends real
 mail through Owlpost, so a first sign-in by magic link works there once
