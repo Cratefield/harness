@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 {% include "_head.html" %}
-<title>Continue · {{ brand.name }}</title>
+<title>Sign in · {{ brand.name }}</title>
 {% if let Some(script) = turnstile_script %}<script src="{{ script }}" async defer></script>
 {% endif %}
 </head>
@@ -10,39 +10,45 @@
 <div class="cf-toasts" id="cf-toasts" role="region" aria-label="Notifications" aria-live="polite"></div>
 <main>
   {% include "_brand_header.html" %}
-  <h1>Continue</h1>
-  <p class="sub">Sign in, or create an account, to continue to {{ brand.name }}. You do not need to choose.</p>
+  <h1>Sign in</h1>
+  <p class="sub">New here? We'll set up your account when you continue.</p>
+
+  {# The main action, first and alone. Hidden until the script proves the browser can run a passkey ceremony. #}
+  {% if has_passkey %}
+  <button class="cf-primary" type="button" id="cf-passkey" data-method="passkey" data-return-to="{{ return_to }}" hidden>Sign in with a passkey</button>
+  {% endif %}
+
+  {# The divider sits between the two paths; the script shows it only with the passkey button. #}
+  {% if has_passkey && has_email %}
+  <div class="cf-or" id="cf-or" hidden><span>or</span></div>
+  {% endif %}
 
   {% if has_email %}
+  <section class="cf-email" aria-label="Sign in with email">
   <form method="post" action="/v1/auth-magic-link/start" class="cf-form" id="cf-continue" novalidate>
     <input type="hidden" name="return_to" value="{{ return_to }}">
     {% if let Some(address) = hint %}
     <input type="hidden" name="email" id="cf-email-fixed" value="{{ address }}">
-    <p class="cf-hint-line">Continuing as <strong>{{ address }}</strong>. <a class="cf-back" href="{{ return_to_without_hint }}">Use a different address</a></p>
+    <p class="cf-hint-line">Signing in as <strong>{{ address }}</strong>. <a class="cf-back" href="{{ return_to_without_hint }}">Use a different address</a></p>
     {% else %}
     <label class="cf-label" for="cf-email">Email address</label>
-    <input class="cf-input" id="cf-email" name="email" type="email" autocomplete="username webauthn" inputmode="email" required aria-describedby="cf-email-help">
-    <p class="sub" id="cf-email-help">Passkeys saved on this device are offered here too.</p>
+    <input class="cf-input" id="cf-email" name="email" type="email" autocomplete="username webauthn" inputmode="email" required>
     {% endif %}
-    {% if has_passkey %}
-    <button class="cf-primary" type="button" id="cf-passkey" data-method="passkey" data-return-to="{{ return_to }}" hidden>Continue with a passkey</button>
-    {% endif %}
+    {# The widget protects this form only, so it sits in the email section, right above its button. #}
     {% if let Some(widget) = turnstile_widget %}{{ widget|safe }}
     {% endif %}
-    <button class="cf-secondary" type="submit">Email me a link</button>
+    <button class="{% if has_passkey %}cf-secondary{% else %}cf-primary{% endif %}" type="submit">Email me a sign-in link</button>
     {% if !registration_open %}
     <p class="cf-notice">This app is invite-only. Use the address your invitation was sent to.</p>
     {% endif %}
   </form>
+  </section>
   {% else if has_passkey %}
-  <form class="cf-form" id="cf-continue">
-    <input type="hidden" id="cf-email-fixed" value="">
-    <button class="cf-primary" type="button" id="cf-passkey" data-method="passkey" data-return-to="{{ return_to }}" hidden>Continue with a passkey</button>
-  </form>
+  <input type="hidden" id="cf-email-fixed" value="">
   {% endif %}
 
   {% if !methods.is_empty() %}
-  <h2 class="cf-section-title">Other ways to continue</h2>
+  <h2 class="cf-section-title">Other ways to sign in</h2>
   <ul class="methods">
     {% for method in methods %}
     <li><a class="method" data-method="{{ method.slug }}" href="{{ method.href }}">{{ method.label }}</a></li>
@@ -76,6 +82,10 @@
   var toasts = document.getElementById("cf-toasts");
   if (!button || !window.PublicKeyCredential || !navigator.credentials) return;
   button.hidden = false;
+  // The divider only separates the passkey from the email path, so it is
+  // shown with the passkey and never on its own.
+  var divider = document.getElementById("cf-or");
+  if (divider) divider.hidden = false;
 
   // Read from a data attribute rather than interpolated into this script.
   // `return_to` is a URL carrying the caller's own query parameters, so a

@@ -151,10 +151,7 @@ impl EvmWallet {
     /// is what a browser wallet returns from `personal_sign`.
     #[must_use]
     pub fn sign_personal(&self, message: &str) -> String {
-        let (sig, recovery) = self
-            .key
-            .sign_prehash_recoverable(&eip191_hash(message))
-            .expect("a secp256k1 key signs its own prehash");
+        let (sig, recovery) = self.key.sign_prehash_recoverable(&eip191_hash(message));
         let mut bytes = sig.to_bytes().to_vec();
         // Ethereum's `v` is the recovery id biased by 27; the module reads
         // both 0/1 and 27/28.
@@ -169,7 +166,7 @@ impl EvmWallet {
 #[must_use]
 pub fn eth_address(key: &k256::ecdsa::SigningKey) -> String {
     let verifying = k256::ecdsa::VerifyingKey::from(key);
-    let point = verifying.to_encoded_point(false);
+    let point = verifying.to_sec1_point(false);
     let hash = keccak256(&point.as_bytes()[1..]);
     format!("0x{}", hex::encode(&hash[12..]))
 }

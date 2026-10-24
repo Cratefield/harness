@@ -171,7 +171,7 @@ async fn the_chooser_renders_the_widget_inside_the_email_form_with_its_own_polic
     );
     // The widget sits in the email form, above the email button.
     let widget = page.find("class=\"cf-turnstile\"").expect("widget");
-    let button = page.find("Email me a link").expect("button");
+    let button = page.find("Email me a sign-in link").expect("button");
     let form_start = page.find("id=\"cf-continue\"").expect("form");
     assert!(
         form_start < widget && widget < button,

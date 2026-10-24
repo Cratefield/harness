@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8](https://github.com/Cratefield/harness/compare/cratefield-module-notifications-v0.3.7...cratefield-module-notifications-v0.3.8) - 2026-10-24
+
+### Other
+
+- updated the following local packages: cratefield-auth-client
+
 ## [0.3.7](https://github.com/Cratefield/harness/compare/cratefield-module-notifications-v0.3.6...cratefield-module-notifications-v0.3.7) - 2026-10-21
 
 ### Other

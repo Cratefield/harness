@@ -54,6 +54,6 @@ pollster = { version = "0.4", features = ["macro"] }
 tower = { version = "0.5", features = ["util"] }
 async-trait = "0.1"
 # A throwaway P-256 key for the Apple minting tests. The workspace pin
-# (0.13) is enough to *produce* a PKCS#8 PEM; auth-oidc's own 0.14 does
-# the parsing inside the minter.
+# (0.14) is enough to *produce* a PKCS#8 PEM; auth-oidc does the parsing
+# inside the minter.
 p256 = { workspace = true }

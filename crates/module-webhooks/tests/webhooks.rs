@@ -62,9 +62,13 @@ impl Kit {
     /// [`CaptureClient`], which answers from `script` (statuses, in
     /// order) and then always 200.
     fn mount(max_attempts: u32, script: &[u16]) -> Self {
+        Self::mount_module(Webhooks::new().max_attempts(max_attempts), script)
+    }
+
+    /// [`Kit::mount`] for a module built some other way, a configured one.
+    fn mount_module(module: Webhooks, script: &[u16]) -> Self {
         let clock = TestClock::at(NOW_UNIX);
         let http = CaptureClient::scripted(script);
-        let module = Webhooks::new().max_attempts(max_attempts);
         let harness = TestHarness::with_ports(vec![Box::new(module.clone())], |ports| {
             ports.clock = Some(Arc::new(clock.clone()));
             ports.http = Some(Arc::new(http.clone()));
@@ -153,8 +157,13 @@ impl Kit {
     }
 
     async fn drain(&self) -> DrainReport {
+        self.drain_under(Kit::config()).await
+    }
+
+    /// A pass whose `ctx.config` is `config`: the alias comes from here.
+    async fn drain_under(&self, config: Arc<dyn Config>) -> DrainReport {
         self.module
-            .drain_with(&self.context(Kit::config()))
+            .drain_with(&self.context(config))
             .await
             .expect("the drain runs")
     }
@@ -702,6 +711,216 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+#[pollster::test]
+async fn an_unset_alias_sends_exactly_one_signature_header() {
+    let kit = Kit::mount(5, &[]);
+    kit.create_endpoint(ALICE, URL_A, &[]).await;
+    kit.publish(ALICE, "order.paid", json!({ "n": 1 })).await;
+    kit.drain().await;
+
+    let captured = kit.http.captured();
+    assert_eq!(captured.len(), 1);
+    let delivery = &captured[0];
+    for name in [
+        "Content-Type",
+        "Cratefield-Signature",
+        "Cratefield-Event-Id",
+        "Cratefield-Event-Type",
+    ] {
+        header(delivery, name);
+    }
+    let mut names: Vec<&str> = delivery
+        .headers
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "content-type",
+            "cratefield-event-id",
+            "cratefield-event-type",
+            "cratefield-signature",
+        ],
+        "no alias header appears"
+    );
+    assert_eq!(kit.module.signature_headers(), ["Cratefield-Signature"]);
+}
+
+#[pollster::test]
+async fn a_configured_alias_carries_the_same_signature_under_both_names() {
+    let config = MapConfig::from_pairs([("WEBHOOKS_SIGNATURE_ALIAS", "Owlpost-Signature")]);
+    assert!(Webhooks::new().validate_config(&config).is_ok());
+    let module = Webhooks::from_config(&config).expect("a valid alias starts");
+    assert_eq!(
+        module.signature_headers(),
+        ["Cratefield-Signature", "Owlpost-Signature"]
+    );
+
+    let kit = Kit::mount_module(module, &[]);
+    let secret = kit
+        .module
+        .create_endpoint(&*kit.db(), ALICE, URL_A, &[], NOW_ISO)
+        .await
+        .expect("the endpoint registers")
+        .secret;
+    kit.publish(ALICE, "order.paid", json!({ "n": 1 })).await;
+    kit.drain_under(Arc::new(config)).await;
+
+    let captured = kit.http.captured();
+    assert_eq!(captured.len(), 1);
+    let delivery = &captured[0];
+    let signature = header(delivery, "Cratefield-Signature");
+    assert_eq!(header(delivery, "Owlpost-Signature"), signature);
+    assert_eq!(
+        delivery.headers.len(),
+        5,
+        "the alias adds exactly one header"
+    );
+
+    // A receiver verifies the one MAC under either name.
+    let (t, v1) = signature
+        .split_once(",v1=")
+        .map(|(t, v1)| (t.trim_start_matches("t="), v1))
+        .expect("the header shape");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("any key length");
+    mac.update(t.as_bytes());
+    mac.update(b".");
+    mac.update(&delivery.body);
+    assert_eq!(
+        hex(&mac.finalize().into_bytes()),
+        v1,
+        "the delivery is authentic"
+    );
+}
+
+/// A bad alias is refused by `from_config` and by `validate_config`, the two
+/// places a deployment's config is checked, and the problem names the key.
+#[test]
+fn a_malformed_signature_alias_is_refused_at_startup() {
+    for bad in [
+        "   ",
+        " Owlpost-Signature",
+        "Owlpost Signature",
+        "Owlpost:Signature",
+        "Owlpost/Signature",
+        "héllo",
+    ] {
+        let config = MapConfig::from_pairs([("WEBHOOKS_SIGNATURE_ALIAS", bad)]);
+        let error = Webhooks::from_config(&config).expect_err("not an HTTP header token");
+        assert!(
+            error.to_string().contains("WEBHOOKS_SIGNATURE_ALIAS"),
+            "{bad:?}: {error}"
+        );
+        assert!(Webhooks::new().validate_config(&config).is_err(), "{bad:?}");
+    }
+}
+
+/// The alias may not be a header the module already sends, whatever its case.
+#[test]
+fn a_signature_alias_naming_an_engine_header_is_refused() {
+    for sent in [
+        "Cratefield-Signature",
+        "cratefield-signature",
+        "CONTENT-TYPE",
+        "Cratefield-Event-Id",
+        "cratefield-event-type",
+    ] {
+        let config = MapConfig::from_pairs([("WEBHOOKS_SIGNATURE_ALIAS", sent)]);
+        assert!(
+            Webhooks::from_config(&config).is_err(),
+            "{sent} is already sent"
+        );
+        assert!(Webhooks::new().validate_config(&config).is_err(), "{sent}");
+    }
+}
+
+/// The transport owns these: an alias may not name one, whatever its case.
+#[test]
+fn a_signature_alias_naming_a_transport_header_is_refused() {
+    for owned in [
+        "Host",
+        "content-length",
+        "Transfer-Encoding",
+        "Connection",
+        "TE",
+        "Trailer",
+        "Upgrade",
+        "Keep-Alive",
+        "Proxy-Authorization",
+        "proxy-connection",
+    ] {
+        let config = MapConfig::from_pairs([("WEBHOOKS_SIGNATURE_ALIAS", owned)]);
+        let error = Webhooks::from_config(&config).expect_err("the transport owns it");
+        assert!(
+            error.to_string().contains("WEBHOOKS_SIGNATURE_ALIAS"),
+            "{owned}: {error}"
+        );
+        assert!(Webhooks::new().validate_config(&config).is_err(), "{owned}");
+    }
+}
+
+/// An empty value is the same as an unset one, not a malformed alias.
+#[test]
+fn an_empty_signature_alias_means_unset() {
+    let config = MapConfig::from_pairs([("WEBHOOKS_SIGNATURE_ALIAS", "")]);
+    let module = Webhooks::from_config(&config).expect("empty is unset");
+    assert_eq!(module.signature_headers(), ["Cratefield-Signature"]);
+    assert!(Webhooks::new().validate_config(&config).is_ok());
+}
+
+/// A module built with `new()` still sends the alias its drain config names:
+/// the wire follows the config the pass is given, not the constructor.
+#[pollster::test]
+async fn a_new_module_still_sends_the_alias_the_drain_config_names() {
+    let kit = Kit::mount(5, &[]);
+    let config: Arc<dyn Config> = Arc::new(MapConfig::from_pairs([(
+        "WEBHOOKS_SIGNATURE_ALIAS",
+        "Owlpost-Signature",
+    )]));
+    kit.create_endpoint(ALICE, URL_A, &[]).await;
+    kit.publish(ALICE, "order.paid", json!({ "n": 1 })).await;
+    kit.drain_under(config).await;
+
+    let captured = kit.http.captured();
+    assert_eq!(captured.len(), 1);
+    let delivery = &captured[0];
+    assert_eq!(
+        header(delivery, "Owlpost-Signature"),
+        header(delivery, "Cratefield-Signature"),
+        "both names carry the one MAC"
+    );
+    assert_eq!(delivery.headers.len(), 5);
+}
+
+/// An alias that is unusable when the pass runs sends nothing, and leaves the
+/// queued delivery where it was for a later, correct pass.
+#[pollster::test]
+async fn a_bad_alias_at_drain_time_sends_nothing_and_keeps_the_queue() {
+    let kit = Kit::mount(5, &[]);
+    kit.create_endpoint(ALICE, URL_A, &[]).await;
+    kit.publish(ALICE, "order.paid", json!({ "n": 1 })).await;
+
+    let bad: Arc<dyn Config> = Arc::new(MapConfig::from_pairs([(
+        "WEBHOOKS_SIGNATURE_ALIAS",
+        "Host",
+    )]));
+    let error = kit
+        .module
+        .drain_with(&kit.context(bad))
+        .await
+        .expect_err("the pass refuses the alias");
+    assert!(
+        error.to_string().contains("WEBHOOKS_SIGNATURE_ALIAS"),
+        "{error}"
+    );
+    assert!(kit.http.captured().is_empty(), "nothing was sent");
+
+    kit.drain().await;
+    assert_eq!(kit.http.captured().len(), 1, "the row was still queued");
 }
 
 #[pollster::test]

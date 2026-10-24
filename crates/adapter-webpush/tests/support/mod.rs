@@ -30,7 +30,7 @@ use aes_gcm::aead::{Aead, Key, KeyInit, Nonce};
 use bytes::Bytes;
 use cratefield_core::{Clock, HttpClient, HttpError};
 use hkdf::Hkdf;
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 use p256::{PublicKey, SecretKey};
 use sha2::Sha256;
 
@@ -87,7 +87,7 @@ pub fn decrypt(
     // RFC 8291 §3.1: the user agent combines its private key with the public
     // key the server put in `keyid`.
     let ua_secret = SecretKey::from_slice(ua_private).map_err(|_| DecryptError::ServerKey)?;
-    let ua_public = ua_secret.public_key().to_encoded_point(false);
+    let ua_public = ua_secret.public_key().to_sec1_point(false);
     let as_public =
         PublicKey::from_sec1_bytes(as_public_bytes).map_err(|_| DecryptError::ServerKey)?;
     let shared = p256::ecdh::diffie_hellman(ua_secret.to_nonzero_scalar(), as_public.as_affine());
@@ -132,7 +132,7 @@ pub fn decrypt(
 #[must_use]
 pub fn public_key_of(private: &[u8; 32]) -> [u8; 65] {
     let secret = SecretKey::from_slice(private).expect("a valid P-256 scalar");
-    let encoded = secret.public_key().to_encoded_point(false);
+    let encoded = secret.public_key().to_sec1_point(false);
     let mut out = [0u8; 65];
     out.copy_from_slice(encoded.as_bytes());
     out
