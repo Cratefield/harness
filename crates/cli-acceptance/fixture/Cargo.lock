@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-apns"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-fcm"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-adapter-webpush"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-cli"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "base64",
  "bytes",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-auth"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "base64",
  "cratefield-core",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "cratefield-push-wiring"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "bytes",

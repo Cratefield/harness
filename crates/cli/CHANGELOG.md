@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.7.5...cratefield-cli-v0.7.6) - 2026-10-24
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.7.5](https://github.com/Cratefield/harness/compare/cratefield-cli-v0.7.4...cratefield-cli-v0.7.5) - 2026-10-21
 
 ### Other
