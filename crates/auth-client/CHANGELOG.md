@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/Cratefield/harness/compare/cratefield-auth-client-v0.4.1...cratefield-auth-client-v0.4.2) - 2026-10-24
+
+### Other
+
+- fix RUSTSEC-2026-0385/0386/0387 and the tokio AsyncFd advisory ([#934](https://github.com/Cratefield/harness/pull/934))
+
 ## [0.4.1](https://github.com/Cratefield/harness/compare/cratefield-auth-client-v0.4.0...cratefield-auth-client-v0.4.1) - 2026-10-21
 
 ### Other

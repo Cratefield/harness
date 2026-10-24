@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8](https://github.com/Cratefield/harness/compare/cratefield-runtime-native-v0.4.7...cratefield-runtime-native-v0.4.8) - 2026-10-24
+
+### Other
+
+- updated the following local packages: cratefield-auth-client, cratefield-push-wiring
+
 ## [0.4.7](https://github.com/Cratefield/harness/compare/cratefield-runtime-native-v0.4.6...cratefield-runtime-native-v0.4.7) - 2026-10-21
 
 ### Other

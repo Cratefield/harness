@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8](https://github.com/Cratefield/harness/compare/cratefield-v0.2.7...cratefield-v0.2.8) - 2026-10-24
+
+### Other
+
+- updated the following local packages: cratefield-push-auth, cratefield-adapter-turnkey, cratefield-adapter-webpush, cratefield-auth-client, cratefield-module-wallets, cratefield-adapter-apns, cratefield-adapter-fcm, cratefield-adapter-github-app, cratefield-push-wiring, cratefield-runtime-native, cratefield-runtime-cloudflare, cratefield-module-notifications, cratefield-module-telegram
+
 ## [0.2.7](https://github.com/Cratefield/harness/compare/cratefield-v0.2.6...cratefield-v0.2.7) - 2026-10-22
 
 ### Other
