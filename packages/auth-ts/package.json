@@ -45,9 +45,9 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.22.0",
-    "@vitest/runner": "4.1.11",
-    "@vitest/snapshot": "4.1.11",
+    "@vitest/runner": "4.1.12",
+    "@vitest/snapshot": "4.1.12",
     "typescript": "5.9.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   }
 }
