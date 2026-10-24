@@ -28,6 +28,7 @@ use cratefield_core::{
     AnyError, BoxFuture, Config, ConfigError, Database, DbError, IdGen, Migrations, Module,
     ModuleConfig, ModuleContext, PersonalDataSet, Port, SqlMigration, UlidIdGen,
 };
+use http::header::CONTENT_TYPE;
 
 /// The name the module mounts under: `/v1/webhooks`.
 pub const MODULE_NAME: &str = "webhooks";
@@ -50,6 +51,9 @@ pub struct Webhooks {
     /// Dead-letter a delivery after this many failed attempts. Overridden
     /// per deployment by `WEBHOOKS_MAX_ATTEMPTS`.
     max_attempts: u32,
+    /// The second signature header, `WEBHOOKS_SIGNATURE_ALIAS`, as
+    /// [`Webhooks::from_config`] validated it.
+    signature_alias: Option<String>,
 }
 
 impl Default for Webhooks {
@@ -59,10 +63,48 @@ impl Default for Webhooks {
 }
 
 impl Webhooks {
-    /// Defaults: dead-letter after five failed attempts.
+    /// Defaults: dead-letter after five failed attempts, no signature alias.
     #[must_use]
     pub fn new() -> Self {
-        Self { max_attempts: 5 }
+        Self {
+            max_attempts: 5,
+            signature_alias: None,
+        }
+    }
+
+    /// The module as the deployment configures it. `WEBHOOKS_SIGNATURE_ALIAS`
+    /// names a second header that carries the same signature, for receivers
+    /// that verify under their product's own header name; unset is
+    /// [`Webhooks::new`]. `WEBHOOKS_MAX_ATTEMPTS` is still read by the drain.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] when the alias is not an HTTP header token, or names a
+    /// header the module or the transport already sends. Build the module
+    /// with this at boot to refuse a bad alias then. The drain reads the
+    /// alias from its own config on every pass, so it refuses one then too.
+    pub fn from_config(cfg: &dyn Config) -> Result<Self, ConfigError> {
+        match signature_alias(cfg) {
+            Ok(signature_alias) => Ok(Self {
+                signature_alias,
+                ..Self::new()
+            }),
+            Err(problem) => {
+                let mut errors = ConfigError::default();
+                errors.push(problem);
+                Err(errors)
+            }
+        }
+    }
+
+    /// The signature header names [`Webhooks::from_config`] stored:
+    /// [`SIGNATURE_HEADER`], then the alias if there is one. All of them carry
+    /// the same value. The drain takes its names from the config it is given.
+    #[must_use]
+    pub fn signature_headers(&self) -> Vec<&str> {
+        let mut names = vec![SIGNATURE_HEADER];
+        names.extend(self.signature_alias.as_deref());
+        names
     }
 
     /// Dead-letter a delivery after this many failed attempts instead of
@@ -226,10 +268,14 @@ impl Webhooks {
     /// when the budget runs out the rows it never reached stay queued, due
     /// now, for the next tick. A per-row failure never aborts the pass.
     ///
+    /// The signature names come from `ctx`'s `WEBHOOKS_SIGNATURE_ALIAS`, on
+    /// every pass, whichever constructor built this module.
+    ///
     /// # Errors
     ///
-    /// [`DeliveryError`] when a port is missing, the claim fails, or the
-    /// outbox refuses a completion write.
+    /// [`DeliveryError`] when a port is missing, the claim fails, the outbox
+    /// refuses a completion write, or the alias is not usable. An unusable
+    /// alias is refused before any row is claimed.
     pub async fn drain_with(&self, ctx: &ModuleContext) -> Result<DrainReport, DeliveryError> {
         deliver::drain(ctx, self.max_attempts).await
     }
@@ -386,6 +432,9 @@ impl Module for Webhooks {
                 "webhooks: {} must be a whole number between 1 and 1000",
                 module.key("MAX_ATTEMPTS")
             ));
+        }
+        if let Err(problem) = signature_alias(cfg) {
+            errors.push(problem);
         }
         errors.into_result()
     }
@@ -550,6 +599,44 @@ impl Published {
 /// carry.
 fn is_valid_event_type(event_type: &str) -> bool {
     (1..=128).contains(&event_type.len()) && event_type.chars().all(|c| c.is_ascii_graphic())
+}
+
+/// `WEBHOOKS_SIGNATURE_ALIAS`: `None` when unset or empty, otherwise an HTTP
+/// header token the module and the transport do not already own, compared
+/// case-insensitively. The problem names the key, never the value.
+pub(crate) fn signature_alias(cfg: &dyn Config) -> Result<Option<String>, String> {
+    let key = ModuleConfig::new(MODULE_NAME, cfg).key("SIGNATURE_ALIAS");
+    let Some(raw) = cfg.get(&key).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let reserved = [
+        CONTENT_TYPE.as_str(),
+        SIGNATURE_HEADER,
+        EVENT_ID_HEADER,
+        EVENT_TYPE_HEADER,
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "te",
+        "trailer",
+        "upgrade",
+        "keep-alive",
+        "proxy-authorization",
+        "proxy-connection",
+    ];
+    let usable = http::HeaderName::from_bytes(raw.as_bytes()).is_ok_and(|name| {
+        !reserved
+            .iter()
+            .any(|sent| sent.eq_ignore_ascii_case(name.as_str()))
+    });
+    if usable {
+        Ok(Some(raw))
+    } else {
+        Err(format!(
+            "webhooks: {key} must be an HTTP header name the module does not already send"
+        ))
+    }
 }
 
 /// Whether an endpoint's stored `event_types` filter matches an event.

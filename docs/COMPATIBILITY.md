@@ -100,7 +100,7 @@ compatibility-doc` and checked in CI for drift. Do not edit by hand.
 | `cratefield-module-telemetry` | 0.3.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-waitlist` | 0.4.5 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-module-wallets` | 0.1.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
-| `cratefield-module-webhooks` | 0.4.2 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
+| `cratefield-module-webhooks` | 0.5.0 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-oauth-client` | 0.3.4 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-provisioning` *(not published)* | 0.1.1 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |
 | `cratefield-push-auth` | 0.3.3 | 1 | `^0.10` — `>=0.10.0, <0.11.0` |

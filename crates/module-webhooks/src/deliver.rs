@@ -199,10 +199,12 @@ fn now_timestamps(clock: &Arc<dyn Clock>) -> Timestamps {
 ///
 /// # Errors
 ///
-/// [`DeliveryError`] when a port is missing, the claim fails, or the
-/// outbox refuses a completion write. A per-row *delivery* failure never
-/// aborts the pass: it is counted in [`DrainReport::failed`] and the row
-/// is due again when its lease would have lapsed.
+/// [`DeliveryError`] when a port is missing, the claim fails, the outbox
+/// refuses a completion write, or `WEBHOOKS_SIGNATURE_ALIAS` is not usable.
+/// The alias is checked before any row is claimed, so a refused pass leaves
+/// the queue untouched. A per-row *delivery* failure never aborts the pass:
+/// it is counted in [`DrainReport::failed`] and the row is due again when
+/// its lease would have lapsed.
 pub(crate) async fn drain(
     ctx: &ModuleContext,
     max_attempts: u32,
@@ -227,6 +229,12 @@ pub(crate) async fn drain(
     let max_attempts = i64::from(
         ModuleConfig::new(crate::MODULE_NAME, &*ctx.config).get_u32("MAX_ATTEMPTS", max_attempts),
     );
+    // Read from the config this pass was handed, so the wire always matches
+    // it, whichever constructor built the module.
+    let alias = crate::signature_alias(&*ctx.config).map_err(DeliveryError::Config)?;
+    let signature_headers: Vec<&str> = std::iter::once(SIGNATURE_HEADER)
+        .chain(alias.as_deref())
+        .collect();
 
     let counters = Counters::default();
     let budget: &ScheduledBudget = &ctx.scheduled;
@@ -247,9 +255,12 @@ pub(crate) async fn drain(
                 let http = Arc::clone(&http);
                 let clock = Arc::clone(&clock);
                 let counters = &counters;
+                let signature_headers = signature_headers.as_slice();
                 async move {
                     let now = now_timestamps(&clock);
-                    match deliver_one(&*db, &*http, &record, max_attempts, &now).await {
+                    match deliver_one(&*db, &*http, &record, max_attempts, &now, signature_headers)
+                        .await
+                    {
                         Ok(Filed::Delivered) => {
                             counters.delivered.fetch_add(1, Ordering::Relaxed);
                             Processed::Done
@@ -309,6 +320,7 @@ async fn deliver_one(
     record: &OutboxRecord,
     max_attempts: i64,
     now: &Timestamps,
+    signature_headers: &[&str],
 ) -> Result<Filed, DeliveryError> {
     let Ok(job) = serde_json::from_str::<DeliveryJob>(&record.payload) else {
         return dead_letter_malformed(db, record, now).await;
@@ -333,7 +345,17 @@ async fn deliver_one(
     .map_err(|error| DeliveryError::Encode(error.to_string()))?;
 
     let attempt = record.attempts + 1;
-    match post(http, &target.url, &target.secret, &job, &body, now.unix).await {
+    match post(
+        http,
+        &target.url,
+        &target.secret,
+        &job,
+        &body,
+        now.unix,
+        signature_headers,
+    )
+    .await
+    {
         Ok(status) if status.is_success() => {
             log_attempt(
                 db,
@@ -490,14 +512,19 @@ async fn post(
     job: &DeliveryJob,
     body: &[u8],
     unix_now: i64,
+    signature_headers: &[&str],
 ) -> Result<StatusCode, HttpError> {
     let signature = signature_header(secret, unix_now, body)
         .ok_or_else(|| HttpError::Transport("signing failed".to_owned()))?;
-    let request = Request::builder()
+    let mut builder = Request::builder()
         .method(http::Method::POST)
         .uri(url)
-        .header(CONTENT_TYPE, "application/json")
-        .header(SIGNATURE_HEADER, signature)
+        .header(CONTENT_TYPE, "application/json");
+    // One MAC, under every signature name: the alias carries the same value.
+    for name in signature_headers {
+        builder = builder.header(*name, signature.clone());
+    }
+    let request = builder
         .header(EVENT_ID_HEADER, job.event_id.as_str())
         .header(EVENT_TYPE_HEADER, job.event_type.as_str())
         .body(Bytes::copy_from_slice(body))
@@ -582,6 +609,9 @@ pub enum DeliveryError {
     /// The envelope could not be serialised. Cannot happen for a payload
     /// that parsed on the way in, but a serde error is not a panic.
     Encode(String),
+    /// The deployment's configuration cannot be honoured, as its problem
+    /// text (already prefixed `webhooks:`).
+    Config(String),
 }
 
 impl std::fmt::Display for DeliveryError {
@@ -590,6 +620,7 @@ impl std::fmt::Display for DeliveryError {
             DeliveryError::MissingPort(port) => write!(f, "webhooks: missing port {port}"),
             DeliveryError::Database(error) => write!(f, "webhooks: {error}"),
             DeliveryError::Encode(error) => write!(f, "webhooks: {error}"),
+            DeliveryError::Config(problem) => f.write_str(problem),
         }
     }
 }
