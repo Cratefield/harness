@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 
-use cratefield_auth_core::{PROVIDER_APPLE, PROVIDER_GOOGLE, SSO_PROVIDER};
+use cratefield_auth_core::{PROVIDER_APPLE, PROVIDER_FACTORY_ZERO, PROVIDER_GOOGLE, SSO_PROVIDER};
 use openidconnect::AuthType;
 use openidconnect::core::{CoreClientAuthMethod, CoreJwsSigningAlgorithm, CoreProviderMetadata};
 
@@ -139,9 +139,28 @@ pub const APPLE: Provider = Provider {
     auth_type: TokenAuth::RequestBody,
 };
 
+/// Factory Zero (`auth.factory0.ventures`), a Cratefield auth server.
+///
+/// Its ID tokens are ES256 (`cratefield-auth-core` mints ES256 only), so
+/// the algorithm is pinned to ES256 here, and an RS256 or HS256 token from
+/// anything claiming this issuer is refused. The issuer is fixed: an
+/// operator can only point the client credentials somewhere else, never
+/// the trust anchor.
+pub(crate) const FACTORY_ZERO: Provider = Provider {
+    slug: PROVIDER_FACTORY_ZERO,
+    issuer: Cow::Borrowed("https://auth.factory0.ventures"),
+    scopes: &["email", "profile"],
+    config: "FACTORY_ZERO",
+    label: "Factory Zero",
+    signing_algorithms: &[CoreJwsSigningAlgorithm::EcdsaP256Sha256],
+    response_mode: ResponseMode::Query,
+    secret: SecretSource::Configured,
+    auth_type: TokenAuth::Basic,
+};
+
 /// Every provider this module serves. Adding one is a line here plus its
 /// config keys.
-pub const PROVIDERS: &[Provider] = &[GOOGLE, APPLE];
+pub const PROVIDERS: &[Provider] = &[GOOGLE, APPLE, FACTORY_ZERO];
 
 /// The provider a request names, or `None` when the path segment is not one
 /// we serve.
@@ -175,9 +194,9 @@ pub(crate) fn sso(issuer: &str) -> Provider {
         // connection, and `provider_credentials` returns nothing for one.
         config: "",
         label: "SSO",
-        // RS256 only, pinned for the same reason Google's is: this version
-        // of openidconnect cannot verify ES256 at all, so a document that
-        // listed it would be believed and then fail opaquely.
+        // RS256 only, pinned for the same reason Google's is: an enterprise
+        // document that listed ES256 would be believed, and a document is
+        // not the place to widen what we accept. Keep this narrow.
         signing_algorithms: &[CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256],
         // The callback is a single fixed redirect, so the response must
         // arrive as a query string and the flow cookie stays `SameSite=Lax`.

@@ -13,6 +13,7 @@ use bytes::Bytes;
 use cratefield_core::{HttpClient, HttpError};
 use http::{Request, Response};
 use rsa::signature::{SignatureEncoding as _, Signer as _};
+use rsa::traits::PublicKeyParts as _;
 use serde_json::{Value, json};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -41,6 +42,9 @@ pub const SSO_ISSUER: &str = "https://idp.acme.example";
 pub const SSO_CLIENT_ID: &str = "acme-oidc-client";
 pub const SSO_CLIENT_SECRET: &str = "acme-oidc-client-secret";
 pub const SSO_EMAIL: &str = "ada@acme.example";
+pub const FACTORY_ZERO_ISSUER: &str = "https://auth.factory0.ventures";
+pub const FACTORY_ZERO_CLIENT_ID: &str = "ledgers-venture-client";
+pub const FACTORY_ZERO_CLIENT_SECRET: &str = "factory-zero-client-secret";
 
 /// One 2048-bit key for the whole test binary; generating one per test would
 /// dominate the run.
@@ -72,9 +76,24 @@ pub struct TokenClaims {
     /// fake that only ever mints a bool cannot catch a client that only
     /// accepts one.
     pub email_verified_as_string: bool,
+    /// Sign the token ES256 with the P-256 test key, and publish that key as
+    /// an EC JWK. Factory Zero mints ES256, so its fake does too.
+    pub es256: bool,
 }
 
 impl TokenClaims {
+    /// The shape Factory Zero sends (`auth.factory0.ventures`): a Cratefield
+    /// server that signs ID tokens ES256, for a venture's client id.
+    pub fn factory_zero() -> Self {
+        Self {
+            issuer: FACTORY_ZERO_ISSUER.to_owned(),
+            audience: FACTORY_ZERO_CLIENT_ID.to_owned(),
+            subject: "factory-zero-subject-1".to_owned(),
+            es256: true,
+            ..Self::default()
+        }
+    }
+
     /// The shape an enterprise `IdP` sends through a connection (#627):
     /// the connection's issuer and OIDC client id, and an address in one
     /// of the connection's domains. Every field is still a knob.
@@ -106,6 +125,7 @@ impl Default for TokenClaims {
             expires_at: 1_788_778_800,
             key_id: KEY_ID.to_owned(),
             email_verified_as_string: false,
+            es256: false,
         }
     }
 }
@@ -136,6 +156,14 @@ pub struct FakeProvider {
 impl FakeProvider {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A fake Factory Zero: ES256 tokens, an EC JWKS, and the venture's
+    /// client id as the audience.
+    pub fn factory_zero() -> Self {
+        let fake = Self::new();
+        fake.set_claims(TokenClaims::factory_zero());
+        fake
     }
 
     /// What the next ID token will say.
@@ -203,7 +231,27 @@ impl FakeProvider {
     }
 
     fn jwks(&self) -> Value {
-        use rsa::traits::PublicKeyParts as _;
+        if self.claims().es256 {
+            let key_id = self
+                .inner
+                .published_key_id
+                .read()
+                .expect("lock")
+                .clone()
+                .unwrap_or_else(|| KEY_ID.to_owned());
+            let point = p256_verifying().to_sec1_point(false);
+            return json!({
+                "keys": [{
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "use": "sig",
+                    "alg": "ES256",
+                    "kid": key_id,
+                    "x": Base64UrlUnpadded::encode_string(point.x().expect("x").as_slice()),
+                    "y": Base64UrlUnpadded::encode_string(point.y().expect("y").as_slice()),
+                }]
+            });
+        }
         let public = rsa::RsaPublicKey::from(key().clone());
         let key_id = self
             .inner
@@ -246,8 +294,19 @@ impl TokenClaims {
 }
 
 /// A Google-shaped ID token, signed for real with the test key.
+/// The P-256 test key, derived from a fixed scalar. Worthless, like the RSA
+/// one: it signs test tokens and nothing else.
+fn p256_signing() -> p256::ecdsa::SigningKey {
+    p256::ecdsa::SigningKey::from_slice(&[7u8; 32]).expect("a valid P-256 scalar")
+}
+
+fn p256_verifying() -> p256::ecdsa::VerifyingKey {
+    p256::ecdsa::VerifyingKey::from(&p256_signing())
+}
+
 fn mint(claims: &TokenClaims) -> String {
-    let header = json!({ "alg": "RS256", "typ": "JWT", "kid": claims.key_id });
+    let alg = if claims.es256 { "ES256" } else { "RS256" };
+    let header = json!({ "alg": alg, "typ": "JWT", "kid": claims.key_id });
     let mut body = json!({
         "iss": claims.issuer,
         "aud": claims.audience,
@@ -275,8 +334,14 @@ fn mint(claims: &TokenClaims) -> String {
         Base64UrlUnpadded::encode_string(&serde_json::to_vec(&header).expect("header")),
         Base64UrlUnpadded::encode_string(&serde_json::to_vec(&body).expect("body")),
     );
-    let signer = rsa::pkcs1v15::SigningKey::<rsa::sha2::Sha256>::new(key().clone());
-    let signature = signer.sign(signing_input.as_bytes()).to_vec();
+    let signature = if claims.es256 {
+        use p256::ecdsa::signature::Signer as _;
+        let sig: p256::ecdsa::Signature = p256_signing().sign(signing_input.as_bytes());
+        sig.to_bytes().to_vec()
+    } else {
+        let signer = rsa::pkcs1v15::SigningKey::<rsa::sha2::Sha256>::new(key().clone());
+        signer.sign(signing_input.as_bytes()).to_vec()
+    };
     format!(
         "{signing_input}.{}",
         Base64UrlUnpadded::encode_string(&signature)
@@ -365,6 +430,9 @@ impl HttpClient for FakeProvider {
                 "scopes_supported": ["openid", "email", "profile"],
                 "claims_supported": ["sub", "email", "email_verified", "name"],
             });
+            if self.claims().es256 {
+                document["id_token_signing_alg_values_supported"] = json!(["ES256"]);
+            }
             if let Some(methods) = self.inner.token_auth_methods.read().expect("lock").clone() {
                 document["token_endpoint_auth_methods_supported"] = json!(methods);
             }

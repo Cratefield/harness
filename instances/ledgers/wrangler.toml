@@ -89,6 +89,10 @@ AUTH_MAGIC_LINK_MAIL_FROM = "Ledgers <sign-in@send.ledgers.sh>"
 AUTH_PASSWORD_PUBLIC_BASE = "https://auth-staging.ledgers.sh"
 AUTH_PASSWORD_MAIL_FROM = "Ledgers <sign-in@send.ledgers.sh>"
 AUTH_OIDC_REDIRECT_BASE = "https://auth-staging.ledgers.sh"
+# "Continue with Factory Zero" (docs/venture-linking.md in factory0). OFF until all three are set: the client id
+# below, the client secret (`bash set-factory-zero-secret.sh`, never a var), and "factory-zero" appended to
+# AUTH_CORE_LOGIN_METHODS. A half configuration refuses to start, so keep this commented until ready.
+# AUTH_OIDC_FACTORY_ZERO_CLIENT_ID = "<client id issued by Factory Zero for this instance>"
 AUTH_META_REDIRECT_BASE = "https://auth-staging.ledgers.sh"
 # Turnstile: the site key is public (the Turnstile widget on the hosted
 # pages); the secret is `TURNSTILE_SECRET`. The verdict must name this host.

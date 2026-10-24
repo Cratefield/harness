@@ -90,5 +90,9 @@
   "auth-passkeys/0003": {
     "file": "0022_auth-passkeys_0003_offer_dismissals.sql",
     "sha256": "9b217fd9160798c57b7f998a0cea7caea6111ef42db3e7869edb0065b38d25bd"
+  },
+  "auth-core/0020": {
+    "file": "0024_auth-core_0020_factory_zero_grants.sql",
+    "sha256": "f5b5a83ce40bfa0452f9d1b79771696d8822904a410c16c83be44c33e803f3d6"
   }
 }

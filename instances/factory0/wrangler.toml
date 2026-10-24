@@ -76,6 +76,10 @@ AUTH_CORS_ORIGINS = "https://factory0.ventures,https://www.factory0.ventures,htt
 AUTH_BRAND_NAME = "Factory Zero"
 AUTH_BRAND_FOOTER = "Factory Zero"
 AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+# Venture linking (docs/venture-linking.md in factory0): the one client allowed to read and change a person's
+# grants, i.e. the control panel's client id (FZ_AUTH_CLIENT_ID on the console Pages project). Leave it unset
+# and the grants routes do not exist. Set it per environment once the client is registered (not in git).
+# AUTH_CORE_GRANTS_CLIENT_ID = "<control panel client id>"
 AUTH_PASSKEYS_RP_ID = "auth-staging.factory0.ventures"
 AUTH_PASSKEYS_ORIGINS = "https://auth-staging.factory0.ventures,http://localhost:8788"
 # Staging leaves AUTH_MAILER unset: the Worker then uses Owlpost as soon as
@@ -140,6 +144,10 @@ AUTH_CORS_ORIGINS = "https://factory0.ventures,https://www.factory0.ventures"
 AUTH_BRAND_NAME = "Factory Zero"
 AUTH_BRAND_FOOTER = "Factory Zero"
 AUTH_CORE_LOGIN_METHODS = "passkey,magic-link"
+# Venture linking (docs/venture-linking.md in factory0): the one client allowed to read and change a person's
+# grants, i.e. the control panel's client id (FZ_AUTH_CLIENT_ID on the console Pages project). Leave it unset
+# and the grants routes do not exist. Set it per environment once the client is registered (not in git).
+# AUTH_CORE_GRANTS_CLIENT_ID = "<control panel client id>"
 AUTH_PASSKEYS_RP_ID = "factory0.ventures"
 AUTH_PASSKEYS_ORIGINS = "https://auth.factory0.ventures"
 AUTH_MAILER = "owlpost"

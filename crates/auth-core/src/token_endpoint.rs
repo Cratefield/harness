@@ -110,7 +110,7 @@ fn pkce_s256_matches(verifier: &str, challenge: &str) -> bool {
 }
 
 /// The session a grant is bound to, still live, with its user.
-async fn live_session_and_user(
+pub(crate) async fn live_session_and_user(
     db: &dyn Database,
     clock: &dyn Clock,
     session_id: &str,
