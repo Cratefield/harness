@@ -40,8 +40,7 @@ zeroize = { workspace = true }
 futures-util = { workspace = true }
 # Apple's client secret is an ES256 JWT this module mints from a PKCS#8
 # key, not a string an operator pastes (#16).
-# Pinned here, not workspace-inherited: the workspace `p256` is 0.13.2 for
-# `cratefield-adapter-apns`, and the login stack is a major ahead (ADR 0013).
+# Pinned here as well as the workspace `p256` (same 0.14 line; ADR 0013).
 p256 = { version = "0.14.0", default-features = false, features = [
     "ecdsa",
     # Apple hands out its signing key as a PKCS#8 PEM `.p8` file (#16), so

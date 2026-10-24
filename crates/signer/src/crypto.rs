@@ -112,7 +112,7 @@ pub(crate) fn secp256k1_address(seed: &[u8; 32]) -> Result<String, SignerError> 
 pub(crate) fn secp256k1_pubkey_bytes(seed: &[u8; 32]) -> Result<[u8; 64], SignerError> {
     let key = SigningKey::from_slice(seed)
         .map_err(|err| SignerError::Invalid(format!("not a valid secp256k1 seed: {err}")))?;
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     let bytes = point.as_bytes();
     if bytes.len() != 65 || bytes[0] != 0x04 {
         return Err(SignerError::Provider(
@@ -139,8 +139,7 @@ pub(crate) fn sign_secp256k1(
 ) -> Result<(Signature, RecoveryId), SignerError> {
     let key = SigningKey::from_slice(seed)
         .map_err(|err| SignerError::Invalid(format!("not a valid secp256k1 seed: {err}")))?;
-    key.sign_prehash_recoverable(prehash)
-        .map_err(|err| SignerError::Provider(format!("secp256k1 signing failed: {err}")))
+    Ok(key.sign_prehash_recoverable(prehash))
 }
 
 /// The two 32-byte halves of an ECDSA signature, `r` then `s`.
@@ -160,7 +159,7 @@ pub(crate) fn recover_address(
 ) -> Result<String, SignerError> {
     let verifying = VerifyingKey::recover_from_prehash(prehash, signature, recovery_id)
         .map_err(|err| SignerError::Provider(format!("the signature does not recover: {err}")))?;
-    let point = verifying.to_encoded_point(false);
+    let point = verifying.to_sec1_point(false);
     let bytes = point.as_bytes();
     if bytes.len() != 65 || bytes[0] != 0x04 {
         return Err(SignerError::Provider(

@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use bytes::Bytes;
 use ed25519_dalek::Signer as _;
+use ed25519_dalek::Verifier as _;
 use http::{HeaderMap, Request, Response, StatusCode};
 use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use p256::ecdsa::signature::Verifier;
@@ -81,7 +82,7 @@ fn api_key_scalar() -> [u8; 32] {
 fn api_key_public_hex() -> String {
     let key = cratefield_adapter_turnkey::stamp::signing_key(&api_key_scalar())
         .expect("the fixture scalar is a valid P-256 scalar");
-    hex::encode(key.verifying_key().to_encoded_point(true).as_bytes())
+    hex::encode(key.verifying_key().to_sec1_point(true).as_bytes())
 }
 
 /// The `cow` key's address, lowercase — the identity the EVM fixture
@@ -89,7 +90,7 @@ fn api_key_public_hex() -> String {
 fn cow_address() -> String {
     use sha3::Digest as _;
     let signing = k256::ecdsa::SigningKey::from_slice(&COW_KEY).expect("a scalar");
-    let point = signing.verifying_key().to_encoded_point(false);
+    let point = signing.verifying_key().to_sec1_point(false);
     let digest: [u8; 32] = sha3::Keccak256::digest(&point.as_bytes()[1..]).into();
     format!("0x{}", hex::encode(&digest[12..]))
 }
@@ -644,7 +645,7 @@ fn signing_a_transaction_round_trips_a_verifiable_signature() {
     let recovery = k256::ecdsa::RecoveryId::new(v - 27 == 1, false);
     let recovered =
         k256::ecdsa::VerifyingKey::recover_from_prehash(&hash, &inner, recovery).expect("recovers");
-    let point = recovered.to_encoded_point(false);
+    let point = recovered.to_sec1_point(false);
     let digest: [u8; 32] = sha3::Keccak256::digest(&point.as_bytes()[1..]).into();
     assert_eq!(format!("0x{}", hex::encode(&digest[12..])), cow_address());
 

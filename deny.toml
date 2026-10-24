@@ -83,7 +83,23 @@ yanked = "deny"
 # signs attacker-supplied bytes, or signs on the request path where its
 # duration can be measured, this acceptance must be re-opened, not re-argued.
 # The two verify-only usages above are unchanged. Same removal trigger.
-ignore = ["RUSTSEC-2023-0071"]
+# RUSTSEC-2026-0387 (crypto-bigint, timing variability) — ACCEPTED 2026-10-24,
+# tracking issue: Cratefield/harness#933. Narrow scope: the advisory
+# has NO fixed release on the 0.5.x line (fixed in >=0.7.6, which this lock
+# uses for everything else). The only remaining crypto-bigint 0.5.5 path is
+#   openidconnect 4.0.1 -> p256 0.13.2 / p384 0.13.1 -> elliptic-curve 0.13.8
+# (`cargo tree -i crypto-bigint@0.5.5` shows nothing else). openidconnect
+# uses those curves only to VERIFY ID-token signatures against the IdP's
+# public JWKS (openidconnect core/crypto.rs, `Verifier::verify`); the inputs
+# (public key, signature, signing input) are not secret, so the secret-
+# dependent branches the advisory describes are not reachable from a secret.
+# No signing with EC keys happens inside openidconnect (its private-key trait
+# is RSA-only in our use). Every workspace EC signing or ECDH path moved to
+# the fixed 0.7.x line in this change. Removal trigger: openidconnect ships a
+# release whose p256/p384 are on elliptic-curve >=0.14 (or the OIDC client is
+# replaced), then drop this entry. Re-open if any EC secret operation is added
+# on the 0.5 line.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387"]
 
 [licenses]
 version = 2

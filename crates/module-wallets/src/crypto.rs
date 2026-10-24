@@ -156,7 +156,7 @@ fn recover_evm_address(hash: &[u8; 32], signature: &[u8; 65]) -> Option<[u8; 20]
 
     // The uncompressed SEC1 encoding is 0x04 || x || y (65 bytes); the
     // Ethereum address is keccak256(x || y)[12:].
-    let point = vk.to_encoded_point(false);
+    let point = vk.to_sec1_point(false);
     let bytes = point.as_bytes();
     if bytes.len() != 65 || bytes[0] != 0x04 {
         return None;

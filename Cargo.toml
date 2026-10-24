@@ -296,14 +296,13 @@ base64 = "0.23.1"
 subtle = "2.6.1"
 hex = "0.4.3"
 # secp256k1 for `module-wallets` (issue #835): recovering the signer's
-# address from an EIP-191 `personal_sign` signature. The 0.13 line, not
-# 0.14, because that is the line built on `elliptic-curve` 0.13 / `ecdsa`
-# 0.16 — the same stack `p384` 0.13 already pulls in above, so an EVM
-# signature check adds no second elliptic-curve stack to the tree.
+# address from an EIP-191 `personal_sign` signature. The 0.14 line
+# (`elliptic-curve` 0.14 / `ecdsa` 0.17 / `crypto-bigint` 0.7), so signing
+# with a secp256k1 key sits on the patched crypto-bigint (RUSTSEC-2026-0387).
 # `default-features = false` keeps `pkcs8`, `pem`, `schnorr` and `std` off;
 # the `ecdsa` feature carries `verifying`, which is where
 # `VerifyingKey::recover_from_prehash` lives. Pure Rust, wasm-safe.
-k256 = { version = "0.13", default-features = false, features = [
+k256 = { version = "0.14", default-features = false, features = [
     "arithmetic",
     "ecdsa",
     "alloc",
@@ -322,7 +321,7 @@ bs58 = "0.5.1"
 # `ecdh` is additive for every existing consumer: it adds
 # `p256::ecdh::diffie_hellman`, which RFC 8291 needs to combine the server's
 # ephemeral key with a browser subscription's `p256dh` (issue #180).
-p256 = { version = "0.13.2", default-features = false, features = [
+p256 = { version = "0.14.0", default-features = false, features = [
     "ecdsa",
     "ecdh",
     "pkcs8",
@@ -419,9 +418,8 @@ futures-channel = "0.3.34"
 
 # --- Brought in with Factory-Zero/auth (ADR 0013). These are the login
 # stack's own dependencies; nothing else in the workspace uses them.
-# `p256` is deliberately absent: auth is on 0.14 and `cratefield-adapter-apns`
-# on 0.13, so the four auth crates pin it directly rather than force a
-# major bump on a published crate (issue: unify the two).
+# `p256` is workspace-pinned at 0.14 (the auth line). The four auth crates
+# still pin it directly with the same version.
 # Apple posts its authorization response as a form body (#16). axum parses
 # one with this crate; the module parses it directly so a malformed body
 # gets the module's own answer rather than axum's rejection text.

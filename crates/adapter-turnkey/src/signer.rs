@@ -207,7 +207,7 @@ fn verify_secp256k1(
         VerifyingKey::recover_from_prehash(prehash, &signature, recovery_id).map_err(|err| {
             SignerError::Provider(format!("turnkey's signature does not recover: {err}"))
         })?;
-    let point = recovered.to_encoded_point(false);
+    let point = recovered.to_sec1_point(false);
     let digest: [u8; 32] = sha3::Keccak256::digest(&point.as_bytes()[1..]).into();
     let address = format!("0x{}", hex::encode(&digest[12..]));
     if !address.eq_ignore_ascii_case(identity) {

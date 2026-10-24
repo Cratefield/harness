@@ -39,7 +39,7 @@ pub fn stamp_with_key(body: &[u8], key: &SigningKey) -> String {
 /// user's API key.
 #[must_use]
 pub fn compressed_public_key_hex(key: &SigningKey) -> String {
-    let encoded = key.verifying_key().to_encoded_point(true);
+    let encoded = key.verifying_key().to_sec1_point(true);
     hex::encode(encoded.as_bytes())
 }
 
