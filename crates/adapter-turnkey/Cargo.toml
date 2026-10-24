@@ -29,7 +29,7 @@ bs58 = { workspace = true }
 base64 = { workspace = true }
 # The API-key stamp: an ECDSA P-256/SHA-256 DER signature over the exact
 # request body (`X-Stamp`, scheme `SIGNATURE_SCHEME_TK_API_P256`). The
-# workspace's own `p256` 0.13 line — the one `adapter-apns` and `webpush`
+# workspace's own `p256` line — the one `adapter-apns` and `webpush`
 # already carry — signs deterministically (RFC 6979, no RNG) and builds
 # for wasm32, which is why the vendor's `turnkey_api_key_stamper` crate
 # is not used: it drags in `getrandom` 0.2 and needs the `js` feature
